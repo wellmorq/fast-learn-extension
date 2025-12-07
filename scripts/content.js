@@ -83,4 +83,3 @@ function cleanMarkdown(markdown) {
 }
 
 extractPageContent();
-

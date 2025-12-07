@@ -20,3 +20,5 @@ Thumbs.db
 *~
 .tmp/
 
+# Gemini AI context file
+GEMINI.md

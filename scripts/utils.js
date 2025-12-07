@@ -80,3 +80,7 @@ function addModelPrefix(modelName) {
     return `models/${modelName}`;
 }
 
+function estimateTokenCount(text) {
+    if (!text) return 0;
+    return Math.ceil(text.length / 4);
+}

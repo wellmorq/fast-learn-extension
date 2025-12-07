@@ -259,7 +259,6 @@ chrome.commands.onCommand.addListener(async (command) => {
             if (result && result.trim()) {
                 textToProcess = result.trim();
             } else {
-                // Извлекаем весь контент страницы
                 const results = await chrome.scripting.executeScript({
                     target: { tabId: tab.id },
                     files: ['libs/readability.min.js', 'libs/turndown.min.js', 'scripts/content.js']
@@ -289,9 +288,8 @@ chrome.commands.onCommand.addListener(async (command) => {
     }
 });
 
-// Calculate window position based on screen size
 function calculateWindowParams(screenWidth, screenHeight) {
-    const referenceWidth = 1920;  // Standard Full HD
+    const referenceWidth = 1920;
     const referenceHeight = 1080;
 
     lastWindowLeft = Math.round((screenWidth / referenceWidth) * 1400);
@@ -328,7 +326,6 @@ async function createPopup() {
             popupHeight = savedSettings.height;
         }
 
-        // Keep window within screen bounds
         lastWindowLeft = Math.min(lastWindowLeft, screenWidth - popupWidth);
         lastWindowTop = Math.min(lastWindowTop, screenHeight - popupHeight);
         lastWindowLeft = Math.max(0, lastWindowLeft);
@@ -382,4 +379,3 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
         }
     }
 });
-

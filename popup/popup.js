@@ -1,9 +1,9 @@
 let messages = [];
 let currentSettings = {};
 let isProcessing = false;
-let contextPreset = null;  // Preset used when opening popup (for initial request)
-let currentFollowupPreset = null;  // Currently selected follow-up preset
-let followupPresetOriginalValues = {};  // Original preset values for proper switching
+let contextPreset = null;
+let currentFollowupPreset = null;
+let followupPresetOriginalValues = {};
 
 document.addEventListener('DOMContentLoaded', async () => {
     try {
@@ -118,7 +118,6 @@ async function loadFollowupPresets() {
         return;
     }
 
-    // Store original preset values for proper switching
     currentSettings.followupPresets.forEach(preset => {
         followupPresetOriginalValues[preset.id] = {
             temperature: preset.temperature,
@@ -222,12 +221,15 @@ function displayTextPreview(text, isPageContent) {
         displayText = text.substring(0, maxLength) + '...';
     }
 
+    const estimatedTokens = estimateTokenCount(text);
+    const tokenInfo = `<span class="token-count" title="Примерное количество токенов">${estimatedTokens} токенов</span>`;
+
     if (isPageContent) {
         const presetName = contextPreset ? ` (${contextPreset.name})` : '';
-        preview.innerHTML = `<strong>📄 Full page content${presetName}</strong><br>${displayText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}`;
+        preview.innerHTML = `<strong>📄 Full page content${presetName} ${tokenInfo}</strong><br>${displayText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}`;
     } else {
         const presetName = contextPreset ? ` (${contextPreset.name})` : '';
-        preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''}</strong><br>${displayText}`;
+        preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''} ${tokenInfo}</strong><br>${displayText}`;
     }
 }
 
@@ -247,19 +249,25 @@ function setupEventListeners() {
             const maxLength = 150;
             const displayText = fullText.length > maxLength ? fullText.substring(0, maxLength) + '...' : fullText;
 
+            const estimatedTokens = estimateTokenCount(fullText);
+            const tokenInfo = `<span class="token-count" title="Примерное количество токенов">${estimatedTokens} токенов</span>`;
+
             if (preview.dataset.isPageContent === 'true') {
-                preview.innerHTML = `<strong>📄 Full page content${presetName}</strong><br>${displayText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}`;
+                preview.innerHTML = `<strong>📄 Full page content${presetName} ${tokenInfo}</strong><br>${displayText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}`;
             } else {
-                preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''}</strong><br>${displayText}`;
+                preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''} ${tokenInfo}</strong><br>${displayText}`;
             }
         } else {
             button.textContent = '[-]';
             const fullText = preview.dataset.fullText || '';
 
+            const estimatedTokens = estimateTokenCount(fullText);
+            const tokenInfo = `<span class="token-count" title="Примерное количество токенов">${estimatedTokens} токенов</span>`;
+
             if (preview.dataset.isPageContent === 'true') {
-                preview.innerHTML = `<strong>📄 Full page content${presetName}</strong><br>${fullText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}`;
+                preview.innerHTML = `<strong>📄 Full page content${presetName} ${tokenInfo}</strong><br>${fullText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}`;
             } else {
-                preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''}</strong><br>${fullText}`;
+                preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''} ${tokenInfo}</strong><br>${fullText}`;
             }
         }
     });
@@ -310,7 +318,6 @@ async function sendFollowUpQuestion() {
         const modelMessageDiv = document.createElement('div');
         modelMessageDiv.className = 'model-message';
 
-        // Move all children to preserve formatting and structure
         while (responseArea.firstChild) {
             modelMessageDiv.appendChild(responseArea.firstChild);
         }
@@ -374,7 +381,6 @@ async function sendToGemini(message, isFollowUp) {
             }
         }
 
-        // Store messages in Google format internally
         if (!isFollowUp) {
             messages = [{
                 role: 'user',
@@ -472,7 +478,6 @@ async function sendToOpenAI(message, isFollowUp) {
             }
         }
 
-        // Maintain internal messages in Google format for consistency with other parts of the app
         if (!isFollowUp) {
             messages = [{
                 role: 'user',
@@ -485,10 +490,8 @@ async function sendToOpenAI(message, isFollowUp) {
             });
         }
 
-        // Convert messages to OpenAI format
         const openAIMessages = [];
 
-        // Add System Prompt if available
         if (preset.systemPrompt) {
             openAIMessages.push({
                 role: 'system',
@@ -496,13 +499,10 @@ async function sendToOpenAI(message, isFollowUp) {
             });
         }
 
-        // Convert history
         messages.forEach(msg => {
             let role = msg.role;
-            // Google uses 'model', OpenAI uses 'assistant'
             if (role === 'model') role = 'assistant';
 
-            // Extract text from parts
             const content = msg.parts.map(p => p.text).join('');
 
             openAIMessages.push({
@@ -540,7 +540,6 @@ async function sendToOpenAI(message, isFollowUp) {
 
         const fullResponse = await handleOpenAIStreamingResponse(response, responseArea);
 
-        // Store response in Google format for history
         messages.push({
             role: 'model',
             parts: [{ text: fullResponse }]
@@ -651,32 +650,61 @@ async function handleOpenAIStreamingResponse(response, displayElement) {
 }
 
 function renderContent(content, element) {
-    const thinkingRegex = /<thinking>([\s\S]*?)<\/thinking>/gi;
     const thinkingBlocks = [];
+    let processedContent = content;
 
-    let processedContent = content.replace(thinkingRegex, (match, thinkingContent) => {
-        thinkingBlocks.push(thinkingContent.trim());
-        return '___THINKING_PLACEHOLDER___';
+    // 1. Handle closed blocks <think>...</think>
+    const closedThinkingRegex = /<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi;
+    processedContent = processedContent.replace(closedThinkingRegex, (match, thinkingContent) => {
+        const id = `THINKING_BLOCK_${thinkingBlocks.length}_PLACEHOLDER`;
+        thinkingBlocks.push({
+            id: id,
+            content: thinkingContent.trim(),
+            isOpen: false
+        });
+        return `\n\n${id}\n\n`; // Add newlines to ensure it's treated as a block
     });
+
+    // 2. Handle open block at the end (for streaming)
+    const openThinkingRegex = /<think(?:ing)?>([\s\S]*?)$/i;
+    const openMatch = openThinkingRegex.exec(processedContent);
+
+    if (openMatch) {
+        const thinkingContent = openMatch[1];
+        const id = `THINKING_BLOCK_${thinkingBlocks.length}_PLACEHOLDER`;
+        
+        // Replace the open tag and content with placeholder
+        processedContent = processedContent.substring(0, openMatch.index) + `\n\n${id}\n\n`;
+
+        thinkingBlocks.push({
+            id: id,
+            content: thinkingContent.trim(),
+            isOpen: true
+        });
+    }
 
     let html = marked.parse(processedContent);
 
     thinkingBlocks.forEach(block => {
-        const escapedBlock = block
+        const escapedBlock = block.content
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#039;');
 
+        const summaryText = block.isOpen ? '💭 Thinking...' : '💭 Thought Process';
+        // Auto-open if it's currently streaming (open)
+        const detailsAttribute = block.isOpen ? ' open' : '';
+
         const thinkingHtml = `
-      <details class="thinking-block">
-        <summary>💭 Процесс размышления...</summary>
+      <details class="thinking-block"${detailsAttribute}>
+        <summary>${summaryText}</summary>
         <div class="thinking-content">${escapedBlock}</div>
       </details>
     `;
 
-        html = html.replace('___THINKING_PLACEHOLDER___', thinkingHtml);
+        html = html.replace(block.id, thinkingHtml);
     });
 
     element.innerHTML = html;

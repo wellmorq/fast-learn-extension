@@ -34,19 +34,15 @@ async function loadSettings() {
 
     currentSettings = settings;
 
-    // Set Provider
     const apiProvider = settings.apiProvider || 'google';
     document.getElementById('api-provider').value = apiProvider;
     toggleProviderSettings(apiProvider);
 
-    // Google Settings
     document.getElementById('api-key').value = settings.apiKey || '';
 
-    // OpenAI Settings
     document.getElementById('openai-base-url').value = settings.openaiBaseUrl || 'https://openrouter.ai/api/v1';
     document.getElementById('openai-api-key').value = settings.openaiApiKey || '';
 
-    // General
     document.getElementById('font-size').value = settings.fontSize || '16px';
     document.getElementById('font-family').value = settings.fontFamily || 'Roboto';
     document.getElementById('color-theme').value = settings.colorTheme || 'soft-gray';
@@ -391,12 +387,10 @@ async function fetchModelsFromOpenAI() {
 
         const data = await response.json();
 
-        // OpenAI list models format: { data: [{ id: "...", ... }, ...] }
         let textModels = [];
         if (data.data && Array.isArray(data.data)) {
             textModels = data.data.map(model => model.id).sort();
         } else {
-            // Fallback if structure is different
              throw new Error('Invalid response format');
         }
 
@@ -466,12 +460,9 @@ async function testAPIKey() {
 
         showStatus('Testing API key...', 'info');
         try {
-             // We can just try to fetch models to verify the key
             await fetchModelsFromOpenAI();
             showStatus('✅ API key works correctly!', 'success');
         } catch (error) {
-             // fetchModelsFromOpenAI handles errors but we catch here to be sure
-             // Do nothing as error is already shown by fetchModelsFromOpenAI
         }
     }
 }
@@ -481,7 +472,6 @@ function setupEventListeners() {
         const provider = e.target.value;
         toggleProviderSettings(provider);
 
-        // Clear models when provider changes as they are likely incompatible
         const modelSelect = document.getElementById('default-model');
         modelSelect.innerHTML = '<option value="">Provider changed - please refresh models</option>';
         cachedModels = [];
