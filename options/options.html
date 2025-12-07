@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>fast-learn Settings</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../styles/themes.css">
+    <link rel="stylesheet" href="options.css">
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>⚡ fast-learn</h1>
+            <p>Configure extension settings</p>
+        </div>
+
+        <!-- Top action buttons (outside tabs) -->
+        <div class="top-actions">
+            <button class="button button-secondary" id="reset-button">↺ Reset</button>
+            <button class="button button-primary" id="save-button">💾 Save</button>
+        </div>
+
+        <!-- Status message -->
+        <div id="status-message" class="status-message"></div>
+
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <button class="tab-button active" data-tab="general">General</button>
+            <button class="tab-button" data-tab="context-presets">Context Presets</button>
+            <button class="tab-button" data-tab="followup-presets">Follow-up Presets</button>
+        </div>
+
+        <!-- Content -->
+        <div class="content">
+
+            <!-- Tab: General -->
+            <div class="tab-content active" id="tab-general">
+                <!-- Section: API Provider -->
+                <div class="section">
+                    <h2 class="section-title">🌐 API Provider</h2>
+                    <p class="section-description">Select the AI provider you want to use</p>
+
+                    <div class="form-group">
+                        <label class="form-label" for="api-provider">Provider:</label>
+                        <select id="api-provider">
+                            <option value="google">Google Gemini</option>
+                            <option value="openai">OpenAI Compatible (OpenRouter, etc.)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Section: Google API Settings -->
+                <div class="section" id="google-settings-section">
+                    <h2 class="section-title">🔑 Google API Settings</h2>
+                    <p class="section-description">Configure connection to Google Gemini API</p>
+
+                    <div class="form-group">
+                        <label class="form-label" for="api-key">API Key:</label>
+                        <input type="password" id="api-key" placeholder="Enter your Gemini API key">
+                        <span class="form-hint">Get your key at <a href="https://aistudio.google.com/app/apikey"
+                                target="_blank">Google AI Studio</a></span>
+                    </div>
+
+                    <button class="button button-secondary" id="test-api-button">🔍 Test API Key</button>
+                </div>
+
+                <!-- Section: OpenAI API Settings -->
+                <div class="section" id="openai-settings-section" style="display: none;">
+                    <h2 class="section-title">🔑 OpenAI API Settings</h2>
+                    <p class="section-description">Configure connection to OpenAI-compatible API</p>
+
+                    <div class="form-group">
+                        <label class="form-label" for="openai-base-url">Base URL:</label>
+                        <input type="text" id="openai-base-url" placeholder="https://openrouter.ai/api/v1">
+                        <span class="form-hint">The base URL for the API (e.g. https://openrouter.ai/api/v1)</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="openai-api-key">API Key:</label>
+                        <input type="password" id="openai-api-key" placeholder="Enter your OpenAI/OpenRouter API key">
+                    </div>
+
+                    <button class="button button-secondary" id="test-openai-api-button">🔍 Test OpenAI API</button>
+                </div>
+
+                <!-- Section: Default Model -->
+                <div class="section">
+                    <h2 class="section-title">🤖 Default Model</h2>
+                    <p class="section-description">Select the Gemini model to use by default</p>
+
+                    <div class="form-group">
+                        <label class="form-label" for="default-model">Model:</label>
+                        <select id="default-model">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+
+                    <button class="button button-secondary" id="refresh-models-button">🔄 Refresh Model List</button>
+                </div>
+
+                <!-- Section: Appearance -->
+                <div class="section">
+                    <h2 class="section-title">🎨 Appearance</h2>
+                    <p class="section-description">Customize text display in popup window</p>
+
+                    <div class="form-group">
+                        <label class="form-label" for="font-size">Font Size:</label>
+                        <select id="font-size">
+                            <option value="12px">Very Small (12px)</option>
+                            <option value="14px">Small (14px)</option>
+                            <option value="16px" selected>Medium (16px)</option>
+                            <option value="18px">Large (18px)</option>
+                            <option value="20px">Very Large (20px)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="font-family">Font Family:</label>
+                        <select id="font-family">
+                            <option value="Roboto" selected>Roboto</option>
+                            <option value="Segoe UI">Segoe UI</option>
+                            <option value="Verdana">Verdana</option>
+                            <option value="Tahoma">Tahoma</option>
+                            <option value="Calibri">Calibri</option>
+                        </select>
+                        <span class="form-hint">All fonts support Cyrillic</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="color-theme">Color Theme:</label>
+                        <select id="color-theme">
+                            <option value="soft-gray">Soft Gray (default)</option>
+                            <option value="light-warm">Light Warm</option>
+                            <option value="dracula">Dracula Dark</option>
+                            <option value="warm-beige">Warm Beige</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Context Presets -->
+            <div class="tab-content" id="tab-context-presets">
+                <div class="section">
+                    <h2 class="section-title">📝 Context Presets Management</h2>
+                    <p class="section-description">Presets used when you first select text or page content via context
+                        menu</p>
+
+                    <div id="context-presets-container" class="presets-list">
+                        <!-- Context Presets will be added dynamically -->
+                    </div>
+
+                    <div style="display: flex; gap: 8px;">
+                        <button class="button button-secondary" id="add-context-preset-button">➕ Add New Preset</button>
+                        <button class="button button-secondary" id="restore-context-defaults-button">🔄 Restore Default
+                            Presets</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Follow-up Presets -->
+            <div class="tab-content" id="tab-followup-presets">
+                <div class="section">
+                    <h2 class="section-title">💬 Follow-up Presets Management</h2>
+                    <p class="section-description">Presets used for follow-up questions in the popup dialog</p>
+
+                    <div id="followup-presets-container" class="presets-list">
+                        <!-- Follow-up Presets will be added dynamically -->
+                    </div>
+
+                    <div style="display: flex; gap: 8px;">
+                        <button class="button button-secondary" id="add-followup-preset-button">➕ Add New
+                            Preset</button>
+                        <button class="button button-secondary" id="restore-followup-defaults-button">🔄 Restore Default
+                            Presets</button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="../scripts/utils.js"></script>
+    <script src="options.js"></script>
+</body>
+
+</html>

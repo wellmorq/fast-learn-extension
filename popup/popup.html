@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>fast-learn</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../styles/themes.css">
+    <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+    <!-- Controls panel (moved to top) -->
+    <div class="controls">
+        <div class="control-group">
+            <label class="control-label">Follow-up:</label>
+            <select id="followup-preset-select" title="Follow-up Preset">
+                <option value="">Loading...</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label class="control-label">Model:</label>
+            <select id="model-select" title="Model">
+                <option value="">Loading...</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Text preview header -->
+    <div class="header">
+        <div class="text-preview-container" id="preview-container">
+            <div class="text-preview" id="text-preview"></div>
+            <button class="toggle-preview" id="toggle-preview" title="Expand/Collapse">[+]</button>
+        </div>
+    </div>
+
+    <!-- Content area -->
+    <div class="content">
+        <!-- Message history -->
+        <div class="message-history" id="message-history"></div>
+
+        <!-- Response area -->
+        <div class="response-area" id="response-area">
+            <div class="loading">Loading...</div>
+        </div>
+    </div>
+
+    <!-- Follow-up input area -->
+    <div class="input-area">
+        <!-- Parameter controls -->
+        <div class="param-controls">
+            <div class="param-item">
+                <label class="param-label">🌡️</label>
+                <input type="range" id="temp-slider" class="param-slider" min="0" max="2.0" step="0.1" value="1.0"
+                    title="Temperature">
+                <span class="param-value" id="temp-value">1.0</span>
+            </div>
+            <div class="param-item">
+                <label class="param-label">💰</label>
+                <input type="number" id="budget-input" class="param-number" min="-1" max="24000" value="-1"
+                    title="Thinking Budget">
+            </div>
+        </div>
+
+        <!-- Follow-up input -->
+        <div class="follow-up-container">
+            <textarea class="follow-up-input" id="follow-up-input" placeholder="Ask a follow-up question..."
+                autocomplete="off" rows="1"></textarea>
+            <button class="ask-button" id="ask-button">Ask</button>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="../libs/marked.min.js"></script>
+    <script src="../scripts/utils.js"></script>
+    <script src="popup.js"></script>
+</body>
+
+</html>

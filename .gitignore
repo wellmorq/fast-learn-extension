@@ -1,0 +1,22 @@
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Extensions
+*.crx
+*.pem
+*.zip
+
+# Temporary files
+*~
+.tmp/
+

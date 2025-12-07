@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Фон -->
+  <rect width="128" height="128" rx="24" fill="#667eea"/>
+  
+  <!-- Книга (основа) -->
+  <path d="M 32 40 L 32 88 L 64 88 L 64 40 Z" fill="#ffffff" opacity="0.9"/>
+  <path d="M 64 40 L 64 88 L 96 88 L 96 40 Z" fill="#ffffff" opacity="0.7"/>
+  
+  <!-- Линии на книге -->
+  <line x1="38" y1="50" x2="58" y2="50" stroke="#667eea" stroke-width="2" stroke-linecap="round"/>
+  <line x1="38" y1="58" x2="58" y2="58" stroke="#667eea" stroke-width="2" stroke-linecap="round"/>
+  <line x1="38" y1="66" x2="52" y2="66" stroke="#667eea" stroke-width="2" stroke-linecap="round"/>
+  
+  <!-- Молния (символ быстроты) -->
+  <path d="M 78 30 L 68 55 L 78 55 L 70 75 L 85 50 L 75 50 Z" fill="#ffeb3b" stroke="#ff9800" stroke-width="2" stroke-linejoin="round"/>
+</svg>
+
