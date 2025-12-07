@@ -7,8 +7,8 @@ let activeTab = 'general';
 document.addEventListener('DOMContentLoaded', async () => {
     try {
         await loadSettings();
-        await loadPresets();
         await loadModels();
+        await loadPresets();
         setupEventListeners();
     } catch (error) {
         console.error('Initialization error:', error);

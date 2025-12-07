@@ -57,6 +57,7 @@ async function loadSettings() {
         apiKey: settings.apiKey || '',
         openaiBaseUrl: settings.openaiBaseUrl || 'https://openrouter.ai/api/v1',
         openaiApiKey: settings.openaiApiKey || '',
+        defaultModel: settings.defaultModel || 'gemini-2.0-flash-exp',
         model: settings.defaultModel || 'gemini-2.0-flash-exp',
         fontSize: settings.fontSize || '16px',
         fontFamily: settings.fontFamily || 'Roboto',
@@ -75,8 +76,8 @@ function applyFontSettings() {
 }
 
 async function loadPresets() {
-    await loadContextPreset();
     await loadFollowupPresets();
+    await loadContextPreset();
 }
 
 async function loadContextPreset() {
@@ -150,11 +151,13 @@ async function loadFollowupPresets() {
 function applyFollowupPreset(preset) {
     currentFollowupPreset = preset;
 
-    if (preset.model) {
-        currentSettings.model = preset.model;
-        const modelSelect = document.getElementById('model-select');
-        if (modelSelect) {
-            modelSelect.value = preset.model;
+    currentSettings.model = preset.model || currentSettings.defaultModel;
+    const modelSelect = document.getElementById('model-select');
+    if (modelSelect) {
+        modelSelect.value = currentSettings.model;
+        if (modelSelect.selectedIndex === -1 && modelSelect.options.length > 0) {
+            modelSelect.selectedIndex = 0;
+            currentSettings.model = modelSelect.value;
         }
     }
 
@@ -197,6 +200,8 @@ function populateModelSelect(models) {
     const modelSelect = document.getElementById('model-select');
     modelSelect.innerHTML = '';
 
+    let isSelected = false;
+
     models.forEach(model => {
         const option = document.createElement('option');
         const displayName = stripModelPrefix(model);
@@ -204,9 +209,15 @@ function populateModelSelect(models) {
         option.textContent = displayName;
         if (model === currentSettings.model || displayName === currentSettings.model) {
             option.selected = true;
+            isSelected = true;
         }
         modelSelect.appendChild(option);
     });
+
+    if (!isSelected && models.length > 0) {
+        modelSelect.selectedIndex = 0;
+        currentSettings.model = models[0];
+    }
 }
 
 function displayTextPreview(text, isPageContent) {
@@ -367,18 +378,28 @@ async function sendToGemini(message, isFollowUp) {
 
     try {
         let preset;
+        let useModel, useTemp, useBudget;
+
         if (!isFollowUp) {
             preset = contextPreset;
             if (!preset) {
                 showError('No context preset loaded');
                 return;
             }
+            useModel = preset.model || currentSettings.defaultModel;
+            useTemp = preset.temperature;
+            useBudget = preset.thinkingBudget;
         } else {
             preset = currentFollowupPreset;
             if (!preset) {
                 showError('No follow-up preset selected');
                 return;
             }
+            useModel = currentSettings.model;
+            const tempSlider = document.getElementById('temp-slider');
+            const budgetInput = document.getElementById('budget-input');
+            useTemp = parseFloat(tempSlider.value);
+            useBudget = parseInt(budgetInput.value);
         }
 
         if (!isFollowUp) {
@@ -393,15 +414,10 @@ async function sendToGemini(message, isFollowUp) {
             });
         }
 
-        const tempSlider = document.getElementById('temp-slider');
-        const budgetInput = document.getElementById('budget-input');
-        const currentTemperature = parseFloat(tempSlider.value);
-        const currentThinkingBudget = parseInt(budgetInput.value);
-
         const requestBody = {
             contents: messages,
             generationConfig: {
-                temperature: currentTemperature
+                temperature: useTemp
             }
         };
 
@@ -412,13 +428,13 @@ async function sendToGemini(message, isFollowUp) {
             };
         }
 
-        if (currentThinkingBudget !== 0) {
+        if (useBudget !== 0) {
             requestBody.generationConfig.thinkingConfig = {
-                thinking_budget: currentThinkingBudget
+                thinking_budget: useBudget
             };
         }
 
-        const model = addModelPrefix(currentSettings.model);
+        const model = addModelPrefix(useModel);
         const url = `https://generativelanguage.googleapis.com/v1beta/${model}:streamGenerateContent?alt=sse&key=${currentSettings.apiKey}`;
 
         const response = await fetch(url, {
@@ -464,18 +480,25 @@ async function sendToOpenAI(message, isFollowUp) {
 
     try {
         let preset;
+        let useModel, useTemp;
+
         if (!isFollowUp) {
             preset = contextPreset;
             if (!preset) {
                 showError('No context preset loaded');
                 return;
             }
+            useModel = preset.model || currentSettings.defaultModel;
+            useTemp = preset.temperature;
         } else {
             preset = currentFollowupPreset;
             if (!preset) {
                 showError('No follow-up preset selected');
                 return;
             }
+            useModel = currentSettings.model;
+            const tempSlider = document.getElementById('temp-slider');
+            useTemp = parseFloat(tempSlider.value);
         }
 
         if (!isFollowUp) {
@@ -511,13 +534,10 @@ async function sendToOpenAI(message, isFollowUp) {
             });
         });
 
-        const tempSlider = document.getElementById('temp-slider');
-        const currentTemperature = parseFloat(tempSlider.value);
-
         const requestBody = {
-            model: currentSettings.model,
+            model: useModel,
             messages: openAIMessages,
-            temperature: currentTemperature,
+            temperature: useTemp,
             stream: true
         };
 
@@ -672,7 +692,7 @@ function renderContent(content, element) {
     if (openMatch) {
         const thinkingContent = openMatch[1];
         const id = `THINKING_BLOCK_${thinkingBlocks.length}_PLACEHOLDER`;
-        
+
         // Replace the open tag and content with placeholder
         processedContent = processedContent.substring(0, openMatch.index) + `\n\n${id}\n\n`;
 
