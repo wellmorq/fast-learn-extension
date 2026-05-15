@@ -64,8 +64,8 @@ function validateThinkingBudget(value) {
 function validateTemperature(value) {
     const num = parseFloat(value);
     if (isNaN(num)) return 1.0;
-    if (num < 0.5) return 0.5;
-    if (num > 1.5) return 1.5;
+    if (num < 0) return 0;
+    if (num > 2.0) return 2.0;
     return num;
 }
 
@@ -83,4 +83,9 @@ function addModelPrefix(modelName) {
 function estimateTokenCount(text) {
     if (!text) return 0;
     return Math.ceil(text.length / 4);
+}
+
+function isGlmModel(modelName) {
+    if (!modelName || typeof modelName !== 'string') return false;
+    return /^glm[-_]/i.test(modelName);
 }

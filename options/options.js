@@ -3,6 +3,7 @@ let followupPresets = [];
 let currentSettings = {};
 let cachedModels = [];
 let activeTab = 'general';
+let unsavedPresetIds = new Set();
 
 document.addEventListener('DOMContentLoaded', async () => {
     try {
@@ -77,6 +78,7 @@ async function loadPresets() {
     const { contextPresets: ctx, followupPresets: flp } = await chrome.storage.local.get(['contextPresets', 'followupPresets']);
     contextPresets = ctx || [];
     followupPresets = flp || [];
+    unsavedPresetIds.clear();
     renderPresets('context');
     renderPresets('followup');
 }
@@ -202,8 +204,8 @@ function setupPresetEventListeners(element, preset, index, type) {
     saveBtn.addEventListener('click', async () => {
         const newName = nameInput.value.trim();
         const newText = textarea.value.trim();
-        const newTemp = parseFloat(tempInput.value);
-        const newThinking = parseInt(thinkingInput.value);
+        const newTemp = validateTemperature(tempInput.value);
+        const newThinking = validateThinkingBudget(thinkingInput.value);
         const newModel = modelSelect.value || null;
 
         if (!newName || !newText) {
@@ -219,11 +221,16 @@ function setupPresetEventListeners(element, preset, index, type) {
 
         const storageKey = type === 'context' ? 'contextPresets' : 'followupPresets';
         await chrome.storage.local.set({ [storageKey]: presets });
+        unsavedPresetIds.delete(preset.id);
         renderPresets(type);
         showStatus('Preset updated', 'success');
     });
 
     cancelBtn.addEventListener('click', () => {
+        if (unsavedPresetIds.has(preset.id)) {
+            presets.splice(index, 1);
+            unsavedPresetIds.delete(preset.id);
+        }
         renderPresets(type);
     });
 
@@ -238,6 +245,7 @@ function setupPresetEventListeners(element, preset, index, type) {
         }
 
         presets.splice(index, 1);
+        unsavedPresetIds.delete(preset.id);
 
         if (preset.isDefault && presets.length > 0) {
             presets[0].isDefault = true;
@@ -307,9 +315,9 @@ async function fetchModelsFromAPI() {
     const provider = document.getElementById('api-provider').value;
 
     if (provider === 'google') {
-        await fetchModelsFromGoogle();
+        return await fetchModelsFromGoogle();
     } else {
-        await fetchModelsFromOpenAI();
+        return await fetchModelsFromOpenAI();
     }
 }
 
@@ -352,13 +360,16 @@ async function fetchModelsFromGoogle() {
         const currentModel = document.getElementById('default-model').value;
         populateDefaultModelSelect(textModels, currentModel);
 
-        renderPresets();
+        renderPresets('context');
+        renderPresets('followup');
 
         showStatus(`Loaded ${textModels.length} models`, 'success');
+        return true;
 
     } catch (error) {
         console.error('Error loading models:', error);
         showStatus(`Error loading models: ${error.message}`, 'error');
+        return false;
     }
 }
 
@@ -404,13 +415,16 @@ async function fetchModelsFromOpenAI() {
         const currentModel = document.getElementById('default-model').value;
         populateDefaultModelSelect(textModels, currentModel);
 
-        renderPresets();
+        renderPresets('context');
+        renderPresets('followup');
 
         showStatus(`Loaded ${textModels.length} models`, 'success');
+        return true;
 
     } catch (error) {
         console.error('Error loading models:', error);
         showStatus(`Error loading models: ${error.message}`, 'error');
+        return false;
     }
 }
 
@@ -459,10 +473,9 @@ async function testAPIKey() {
         }
 
         showStatus('Testing API key...', 'info');
-        try {
-            await fetchModelsFromOpenAI();
+        const success = await fetchModelsFromOpenAI();
+        if (success) {
             showStatus('✅ API key works correctly!', 'success');
-        } catch (error) {
         }
     }
 }
@@ -569,6 +582,7 @@ function addNewPreset(type) {
     };
 
     presets.push(newPreset);
+    unsavedPresetIds.add(newPreset.id);
     renderPresets(type);
 
     setTimeout(() => {
@@ -588,7 +602,10 @@ async function restoreDefaultPresets(type) {
     }
 
     try {
-        await chrome.runtime.sendMessage({ action: 'restoreDefaultPresets' });
+        const response = await chrome.runtime.sendMessage({ action: 'restoreDefaultPresets', type: type });
+        if (response && response.success === false) {
+            throw new Error(response.error || 'restoreDefaultPresets failed');
+        }
         await loadPresets();
 
         showStatus(`✅ Default ${presetType} restored!`, 'success');
@@ -649,6 +666,7 @@ async function saveSettings() {
             followupPresets
         });
 
+        unsavedPresetIds.clear();
         showStatus('✅ Settings saved successfully!', 'success');
 
     } catch (error) {

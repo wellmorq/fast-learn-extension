@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
     "name": "fast-learn",
-    "description": "Fast learning with Google Gemini AI. Select text or send the entire page for analysis and explanation.",
-    "version": "2.1.0",
+    "description": "Fast learning with AI (Google Gemini and OpenAI-compatible providers like GLM/Z.AI, OpenRouter). Explain selected text or whole page.",
+    "version": "2.2.1",
     "permissions": [
         "contextMenus",
         "activeTab",

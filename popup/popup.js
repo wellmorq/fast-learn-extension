@@ -5,6 +5,12 @@ let contextPreset = null;
 let currentFollowupPreset = null;
 let followupPresetOriginalValues = {};
 
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text == null ? '' : String(text);
+    return div.innerHTML;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     try {
         await initializePopup();
@@ -29,8 +35,8 @@ async function initializePopup() {
         currentSettings.selectedPresetId = selectedPresetId;
     }
 
-    await loadPresets();
     await loadModels();
+    await loadPresets();
     displayTextPreview(selectedText, isPageContent);
     setupEventListeners();
     await sendToAI(selectedText, false);
@@ -237,10 +243,10 @@ function displayTextPreview(text, isPageContent) {
 
     if (isPageContent) {
         const presetName = contextPreset ? ` (${contextPreset.name})` : '';
-        preview.innerHTML = `<strong>📄 Full page content${presetName} ${tokenInfo}</strong><br>${displayText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}`;
+        preview.innerHTML = `<strong>📄 Full page content${presetName} ${tokenInfo}</strong><br>${escapeHtml(displayText)}`;
     } else {
         const presetName = contextPreset ? ` (${contextPreset.name})` : '';
-        preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''} ${tokenInfo}</strong><br>${displayText}`;
+        preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''} ${tokenInfo}</strong><br>${escapeHtml(displayText)}`;
     }
 }
 
@@ -264,9 +270,9 @@ function setupEventListeners() {
             const tokenInfo = `<span class="token-count" title="Примерное количество токенов">${estimatedTokens} токенов</span>`;
 
             if (preview.dataset.isPageContent === 'true') {
-                preview.innerHTML = `<strong>📄 Full page content${presetName} ${tokenInfo}</strong><br>${displayText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}`;
+                preview.innerHTML = `<strong>📄 Full page content${presetName} ${tokenInfo}</strong><br>${escapeHtml(displayText)}`;
             } else {
-                preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''} ${tokenInfo}</strong><br>${displayText}`;
+                preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''} ${tokenInfo}</strong><br>${escapeHtml(displayText)}`;
             }
         } else {
             button.textContent = '[-]';
@@ -276,9 +282,9 @@ function setupEventListeners() {
             const tokenInfo = `<span class="token-count" title="Примерное количество токенов">${estimatedTokens} токенов</span>`;
 
             if (preview.dataset.isPageContent === 'true') {
-                preview.innerHTML = `<strong>📄 Full page content${presetName} ${tokenInfo}</strong><br>${fullText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}`;
+                preview.innerHTML = `<strong>📄 Full page content${presetName} ${tokenInfo}</strong><br>${escapeHtml(fullText)}`;
             } else {
-                preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''} ${tokenInfo}</strong><br>${fullText}`;
+                preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''} ${tokenInfo}</strong><br>${escapeHtml(fullText)}`;
             }
         }
     });
@@ -324,7 +330,10 @@ async function sendFollowUpQuestion() {
     if (!question || isProcessing) return;
 
     const responseArea = document.getElementById('response-area');
-    if (responseArea.children.length > 0 && !responseArea.innerHTML.includes('class="loading"')) {
+    const hasContent = responseArea.children.length > 0;
+    const hasLoading = !!responseArea.querySelector('.loading');
+    const hasError = !!responseArea.querySelector('.error-message');
+    if (hasContent && !hasLoading && !hasError) {
         const historyDiv = document.getElementById('message-history');
         const modelMessageDiv = document.createElement('div');
         modelMessageDiv.className = 'model-message';
@@ -334,6 +343,9 @@ async function sendFollowUpQuestion() {
         }
 
         historyDiv.appendChild(modelMessageDiv);
+    } else if (hasError) {
+        // Don't carry the error into history; just clear it.
+        responseArea.innerHTML = '';
     }
 
     addUserMessageToHistory(question);
@@ -387,8 +399,8 @@ async function sendToGemini(message, isFollowUp) {
                 return;
             }
             useModel = preset.model || currentSettings.defaultModel;
-            useTemp = preset.temperature;
-            useBudget = preset.thinkingBudget;
+            useTemp = validateTemperature(preset.temperature);
+            useBudget = validateThinkingBudget(preset.thinkingBudget);
         } else {
             preset = currentFollowupPreset;
             if (!preset) {
@@ -398,8 +410,8 @@ async function sendToGemini(message, isFollowUp) {
             useModel = currentSettings.model;
             const tempSlider = document.getElementById('temp-slider');
             const budgetInput = document.getElementById('budget-input');
-            useTemp = parseFloat(tempSlider.value);
-            useBudget = parseInt(budgetInput.value);
+            useTemp = validateTemperature(tempSlider.value);
+            useBudget = validateThinkingBudget(budgetInput.value);
         }
 
         if (!isFollowUp) {
@@ -459,6 +471,9 @@ async function sendToGemini(message, isFollowUp) {
 
     } catch (error) {
         console.error('Gemini API error:', error);
+        if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+            messages.pop();
+        }
         showError(formatApiError(error, error.status || 0));
     } finally {
         isProcessing = false;
@@ -480,7 +495,7 @@ async function sendToOpenAI(message, isFollowUp) {
 
     try {
         let preset;
-        let useModel, useTemp;
+        let useModel, useTemp, useBudget;
 
         if (!isFollowUp) {
             preset = contextPreset;
@@ -489,7 +504,8 @@ async function sendToOpenAI(message, isFollowUp) {
                 return;
             }
             useModel = preset.model || currentSettings.defaultModel;
-            useTemp = preset.temperature;
+            useTemp = validateTemperature(preset.temperature);
+            useBudget = validateThinkingBudget(preset.thinkingBudget);
         } else {
             preset = currentFollowupPreset;
             if (!preset) {
@@ -498,7 +514,9 @@ async function sendToOpenAI(message, isFollowUp) {
             }
             useModel = currentSettings.model;
             const tempSlider = document.getElementById('temp-slider');
-            useTemp = parseFloat(tempSlider.value);
+            const budgetInput = document.getElementById('budget-input');
+            useTemp = validateTemperature(tempSlider.value);
+            useBudget = validateThinkingBudget(budgetInput.value);
         }
 
         if (!isFollowUp) {
@@ -541,6 +559,12 @@ async function sendToOpenAI(message, isFollowUp) {
             stream: true
         };
 
+        // GLM (Z.AI / Zhipu) supports a top-level `thinking` toggle.
+        // budget === 0 means thinking disabled, anything else enables it.
+        if (isGlmModel(useModel)) {
+            requestBody.thinking = { type: useBudget === 0 ? 'disabled' : 'enabled' };
+        }
+
         const baseUrl = currentSettings.openaiBaseUrl.replace(/\/$/, '');
         const url = `${baseUrl}/chat/completions`;
 
@@ -567,6 +591,9 @@ async function sendToOpenAI(message, isFollowUp) {
 
     } catch (error) {
         console.error('OpenAI API error:', error);
+        if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+            messages.pop();
+        }
         showError(formatApiError(error, error.status || 0));
     } finally {
         isProcessing = false;
@@ -724,7 +751,7 @@ function renderContent(content, element) {
       </details>
     `;
 
-        html = html.replace(block.id, thinkingHtml);
+        html = html.replace(block.id, () => thinkingHtml);
     });
 
     element.innerHTML = html;

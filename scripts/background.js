@@ -1,8 +1,17 @@
-let lastWindowLeft, lastWindowTop, popupWidth, popupHeight;
+importScripts('utils.js');
 
-chrome.runtime.onInstalled.addListener(async () => {
-    await ensurePresetsExist();
-    await createContextMenu();
+let lastWindowLeft, lastWindowTop, popupWidth, popupHeight;
+let popupWindowId = null;
+
+chrome.runtime.onInstalled.addListener(async (details) => {
+    try {
+        await ensurePresetsExist();
+        await createContextMenu();
+        // One-time cleanup of diagnostics keys from older versions
+        await chrome.storage.local.remove(['appLogs', 'lastTestResults', 'lastTestRunAt']);
+    } catch (error) {
+        console.error('onInstalled failed:', error);
+    }
 });
 
 async function ensurePresetsExist() {
@@ -14,12 +23,12 @@ async function ensurePresetsExist() {
     }
 }
 
-async function initializeDefaultSettings() {
-    const defaultContextPresets = [
+function getDefaultContextPresets() {
+    return [
         {
             id: generateId(),
             name: "Detailed Explanation",
-            systemPrompt: `Ты — критичный редактор и фильтр контента. Твоя задача — проанализировать текст и сэкономить мне время. 
+            systemPrompt: `Ты — критичный редактор и фильтр контента. Твоя задача — проанализировать текст и сэкономить мне время.
 
 Сделай краткий разбор по структуре:
 1. **Вердикт 🚦**: Стоит ли читать полностью? (Честно напиши: это "сплошная вода", "маркетинговая статья", "база для новичков" или "уникальный контент").
@@ -100,8 +109,10 @@ async function initializeDefaultSettings() {
             isDefault: false
         }
     ];
+}
 
-    const defaultFollowupPresets = [
+function getDefaultFollowupPresets() {
+    return [
         {
             id: generateId(),
             name: "Conversational",
@@ -150,25 +161,44 @@ async function initializeDefaultSettings() {
             isDefault: false
         }
     ];
-
-    await chrome.storage.local.set({
-        initialized: true,
-        contextPresets: defaultContextPresets,
-        followupPresets: defaultFollowupPresets,
-        defaultContextPresetId: defaultContextPresets[0].id,
-        defaultFollowupPresetId: defaultFollowupPresets[0].id,
-        defaultModel: 'gemini-flash-lite-latest',
-        fontSize: '16px',
-        fontFamily: 'Roboto',
-        colorTheme: 'soft-gray'
-    });
 }
 
-function generateId() {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2);
+async function initializeDefaultSettings(scope = 'all') {
+    const update = {};
+
+    if (scope === 'all' || scope === 'context') {
+        const presets = getDefaultContextPresets();
+        update.contextPresets = presets;
+        update.defaultContextPresetId = presets[0].id;
+    }
+    if (scope === 'all' || scope === 'followup') {
+        const presets = getDefaultFollowupPresets();
+        update.followupPresets = presets;
+        update.defaultFollowupPresetId = presets[0].id;
+    }
+    if (scope === 'all') {
+        update.initialized = true;
+        update.apiProvider = 'openai';
+        update.openaiBaseUrl = 'https://api.z.ai/api/paas/v4';
+        update.defaultModel = 'glm-4.6';
+        update.fontSize = '16px';
+        update.fontFamily = 'Roboto';
+        update.colorTheme = 'soft-gray';
+    }
+
+    await chrome.storage.local.set(update);
 }
 
-async function createContextMenu() {
+let contextMenuQueue = Promise.resolve();
+
+function createContextMenu() {
+    contextMenuQueue = contextMenuQueue
+        .then(buildContextMenu)
+        .catch(error => console.error('Error building context menu:', error));
+    return contextMenuQueue;
+}
+
+async function buildContextMenu() {
     await chrome.contextMenus.removeAll();
 
     const { contextPresets, defaultContextPresetId } = await chrome.storage.local.get(['contextPresets', 'defaultContextPresetId']);
@@ -243,6 +273,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 chrome.commands.onCommand.addListener(async (command) => {
     if (command === "fast-learn-lookup") {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+        if (!tab || !tab.id) {
+            console.warn('No active tab for keyboard shortcut');
+            return;
+        }
 
         try {
             const [{ result }] = await chrome.scripting.executeScript({
@@ -335,24 +370,27 @@ async function createPopup() {
             height: popupHeight,
             left: lastWindowLeft,
             top: lastWindowTop
+        }, (win) => {
+            if (win) popupWindowId = win.id;
         });
     });
 }
 
+chrome.windows.onRemoved.addListener((windowId) => {
+    if (windowId === popupWindowId) popupWindowId = null;
+});
+
 chrome.windows.onBoundsChanged.addListener(function (window) {
+    if (popupWindowId !== null && window.id !== popupWindowId) return;
     if (window.type === "popup" && window.width && window.height) {
-        saveWindowSettings(
-            window.left,
-            window.top,
-            window.width,
-            window.height
-        );
+        saveWindowSettings(window.left, window.top, window.width, window.height);
     }
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'restoreDefaultPresets') {
-        initializeDefaultSettings().then(() => {
+        const scope = message.type === 'context' || message.type === 'followup' ? message.type : 'all';
+        initializeDefaultSettings(scope).then(() => {
             sendResponse({ success: true });
         }).catch(error => {
             console.error('Error restoring presets:', error);
@@ -362,8 +400,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.action === 'reinitialize') {
-        initializeDefaultSettings().then(() => {
+        initializeDefaultSettings('all').then(() => {
             sendResponse({ success: true });
+        }).catch(error => {
+            console.error('Error reinitializing:', error);
+            sendResponse({ success: false, error: error.message });
         });
         return true;
     }
