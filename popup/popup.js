@@ -5,6 +5,25 @@ let contextPreset = null;
 let currentFollowupPreset = null;
 let followupPresetOriginalValues = {};
 
+// === New state ===
+// Snapshot of what was sent to the popup at open time. Used to (a) re-fire
+// the initial query when the user switches the context preset, and (b)
+// resolve {{selectedText}} / {{pageUrl}} / {{pageTitle}} in system prompts.
+let initialContext = { text: '', isPageContent: false, sourceUrl: '', sourceTitle: '' };
+// AbortController of the in-flight fetch — populated before each request.
+let currentAbortController = null;
+// Monotonic request counter. Each request captures its value; stale callbacks
+// (e.g. the aborted request when the user switches preset mid-stream) compare
+// against the global and bail out so they can't clobber the newer request.
+let requestSeq = 0;
+// Markdown source of the last completed response (for the Copy button).
+let lastResponseMarkdown = '';
+// Markdown of the currently-streaming response (so Copy works mid-stream too,
+// and so partial text is preserved on Stop).
+let currentStreamingMarkdown = '';
+// performance.now() timestamp of last fetch start, used for usage footer duration.
+let lastRequestStartedAt = 0;
+
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text == null ? '' : String(text);
@@ -24,12 +43,20 @@ async function initializePopup() {
     await loadSettings();
     applyFontSettings();
 
-    const { selectedText, isPageContent, selectedPresetId } = await chrome.storage.local.get(['selectedText', 'isPageContent', 'selectedPresetId']);
+    const stored = await chrome.storage.local.get(['selectedText', 'isPageContent', 'selectedPresetId', 'sourceUrl', 'sourceTitle']);
+    const { selectedText, isPageContent, selectedPresetId, sourceUrl, sourceTitle } = stored;
 
     if (!selectedText) {
         showError('No text to process');
         return;
     }
+
+    initialContext = {
+        text: selectedText,
+        isPageContent: !!isPageContent,
+        sourceUrl: sourceUrl || '',
+        sourceTitle: sourceTitle || ''
+    };
 
     if (selectedPresetId) {
         currentSettings.selectedPresetId = selectedPresetId;
@@ -63,8 +90,8 @@ async function loadSettings() {
         apiKey: settings.apiKey || '',
         openaiBaseUrl: settings.openaiBaseUrl || 'https://openrouter.ai/api/v1',
         openaiApiKey: settings.openaiApiKey || '',
-        defaultModel: settings.defaultModel || 'gemini-2.0-flash-exp',
-        model: settings.defaultModel || 'gemini-2.0-flash-exp',
+        defaultModel: settings.defaultModel || 'glm-5.1',
+        model: settings.defaultModel || 'glm-5.1',
         fontSize: settings.fontSize || '16px',
         fontFamily: settings.fontFamily || 'Roboto',
         colorTheme: settings.colorTheme || 'soft-gray',
@@ -88,8 +115,11 @@ async function loadPresets() {
 
 async function loadContextPreset() {
     const { selectedPresetId } = await chrome.storage.local.get('selectedPresetId');
+    const contextSelect = document.getElementById('context-preset-select');
+    contextSelect.innerHTML = '';
 
     if (!currentSettings.contextPresets || currentSettings.contextPresets.length === 0) {
+        contextSelect.innerHTML = '<option value="">No context presets</option>';
         console.warn('No context presets found');
         return;
     }
@@ -99,12 +129,19 @@ async function loadContextPreset() {
         preset = currentSettings.contextPresets.find(p => p.id === selectedPresetId);
         currentSettings.selectedPresetId = selectedPresetId;
     }
-
     if (!preset) {
         preset = currentSettings.contextPresets.find(p =>
             p.id === currentSettings.defaultContextPresetId || p.isDefault
         ) || currentSettings.contextPresets[0];
     }
+
+    currentSettings.contextPresets.forEach(p => {
+        const option = document.createElement('option');
+        option.value = p.id;
+        option.textContent = p.name;
+        if (preset && p.id === preset.id) option.selected = true;
+        contextSelect.appendChild(option);
+    });
 
     if (preset) {
         contextPreset = preset;
@@ -160,6 +197,15 @@ function applyFollowupPreset(preset) {
     currentSettings.model = preset.model || currentSettings.defaultModel;
     const modelSelect = document.getElementById('model-select');
     if (modelSelect) {
+        // If the preset references a model not in the current list, add it so it
+        // can actually be selected rather than falling back to the first entry.
+        if (currentSettings.model &&
+            ![...modelSelect.options].some(o => o.value === currentSettings.model)) {
+            const opt = document.createElement('option');
+            opt.value = currentSettings.model;
+            opt.textContent = stripModelPrefix(currentSettings.model);
+            modelSelect.appendChild(opt);
+        }
         modelSelect.value = currentSettings.model;
         if (modelSelect.selectedIndex === -1 && modelSelect.options.length > 0) {
             modelSelect.selectedIndex = 0;
@@ -185,20 +231,18 @@ function applyFollowupPreset(preset) {
 }
 
 async function loadModels() {
-    const modelSelect = document.getElementById('model-select');
-    const { cachedModels } = await chrome.storage.local.get('cachedModels');
+    const provider = currentSettings.apiProvider;
+    const { cachedModels, cachedModelsProvider } = await chrome.storage.local.get(['cachedModels', 'cachedModelsProvider']);
 
-    if (cachedModels && cachedModels.length > 0) {
+    // Only trust the cache if it belongs to the active provider (older caches
+    // had no provider tag — treat those as usable to avoid a forced refresh).
+    const cacheUsable = cachedModels && cachedModels.length > 0 &&
+        (!cachedModelsProvider || cachedModelsProvider === provider);
+
+    if (cacheUsable) {
         populateModelSelect(cachedModels);
     } else {
-        const defaultModels = [
-            'gemini-2.0-flash-exp',
-            'gemini-2.0-flash-thinking-exp-01-21',
-            'gemini-exp-1206',
-            'gemini-1.5-pro',
-            'gemini-1.5-flash'
-        ];
-        populateModelSelect(defaultModels);
+        populateModelSelect(getFallbackModels(provider, currentSettings.defaultModel));
     }
 }
 
@@ -206,9 +250,18 @@ function populateModelSelect(models) {
     const modelSelect = document.getElementById('model-select');
     modelSelect.innerHTML = '';
 
+    // Make sure the currently desired model is always present as an option, so
+    // a configured GLM model is never silently swapped for the first Gemini
+    // entry (and vice-versa).
+    const list = models.slice();
+    const desired = currentSettings.model;
+    if (desired && !list.some(m => m === desired || stripModelPrefix(m) === stripModelPrefix(desired))) {
+        list.unshift(desired);
+    }
+
     let isSelected = false;
 
-    models.forEach(model => {
+    list.forEach(model => {
         const option = document.createElement('option');
         const displayName = stripModelPrefix(model);
         option.value = model;
@@ -220,10 +273,23 @@ function populateModelSelect(models) {
         modelSelect.appendChild(option);
     });
 
-    if (!isSelected && models.length > 0) {
+    if (!isSelected && list.length > 0) {
         modelSelect.selectedIndex = 0;
-        currentSettings.model = models[0];
+        currentSettings.model = list[0];
     }
+}
+
+// Estimate of what will actually be sent on the FIRST request (text + the
+// resolved context preset's system prompt). Updated whenever the user
+// switches context preset. Closer to the real `↑ N` reported by the API
+// than counting the raw selection alone.
+function estimatePreviewTokens(text) {
+    let combined = text || '';
+    if (contextPreset && contextPreset.systemPrompt) {
+        const resolved = applyPromptVariables(contextPreset.systemPrompt, getPromptContext());
+        combined += '\n' + (resolved || '');
+    }
+    return estimateTokenCount(combined);
 }
 
 function displayTextPreview(text, isPageContent) {
@@ -238,8 +304,8 @@ function displayTextPreview(text, isPageContent) {
         displayText = text.substring(0, maxLength) + '...';
     }
 
-    const estimatedTokens = estimateTokenCount(text);
-    const tokenInfo = `<span class="token-count" title="Примерное количество токенов">${estimatedTokens} токенов</span>`;
+    const estimatedTokens = estimatePreviewTokens(text);
+    const tokenInfo = `<span class="token-count" title="Оценка для запроса: текст выделения + system prompt пресета. Реальное число от API см. в ↑ под ответом.">~${estimatedTokens} токенов</span>`;
 
     if (isPageContent) {
         const presetName = contextPreset ? ` (${contextPreset.name})` : '';
@@ -260,32 +326,20 @@ function setupEventListeners() {
 
         container.classList.toggle('expanded');
 
-        if (isExpanded) {
-            button.textContent = '[+]';
-            const fullText = preview.dataset.fullText || '';
-            const maxLength = 150;
-            const displayText = fullText.length > maxLength ? fullText.substring(0, maxLength) + '...' : fullText;
+        const fullText = preview.dataset.fullText || '';
+        const maxLength = 150;
+        const truncated = fullText.length > maxLength ? fullText.substring(0, maxLength) + '...' : fullText;
+        const showText = isExpanded ? truncated : fullText;
 
-            const estimatedTokens = estimateTokenCount(fullText);
-            const tokenInfo = `<span class="token-count" title="Примерное количество токенов">${estimatedTokens} токенов</span>`;
+        const estimatedTokens = estimatePreviewTokens(fullText);
+        const tokenInfo = `<span class="token-count" title="Оценка для запроса: текст выделения + system prompt пресета. Реальное число от API см. в ↑ под ответом.">~${estimatedTokens} токенов</span>`;
 
-            if (preview.dataset.isPageContent === 'true') {
-                preview.innerHTML = `<strong>📄 Full page content${presetName} ${tokenInfo}</strong><br>${escapeHtml(displayText)}`;
-            } else {
-                preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''} ${tokenInfo}</strong><br>${escapeHtml(displayText)}`;
-            }
+        button.textContent = isExpanded ? '[+]' : '[-]';
+
+        if (preview.dataset.isPageContent === 'true') {
+            preview.innerHTML = `<strong>📄 Full page content${presetName} ${tokenInfo}</strong><br>${escapeHtml(showText)}`;
         } else {
-            button.textContent = '[-]';
-            const fullText = preview.dataset.fullText || '';
-
-            const estimatedTokens = estimateTokenCount(fullText);
-            const tokenInfo = `<span class="token-count" title="Примерное количество токенов">${estimatedTokens} токенов</span>`;
-
-            if (preview.dataset.isPageContent === 'true') {
-                preview.innerHTML = `<strong>📄 Full page content${presetName} ${tokenInfo}</strong><br>${escapeHtml(fullText)}`;
-            } else {
-                preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''} ${tokenInfo}</strong><br>${escapeHtml(fullText)}`;
-            }
+            preview.innerHTML = `<strong>${presetName ? presetName.substring(2, presetName.length - 1) : ''} ${tokenInfo}</strong><br>${escapeHtml(showText)}`;
         }
     });
 
@@ -301,19 +355,23 @@ function setupEventListeners() {
         }
     });
 
+    document.getElementById('context-preset-select').addEventListener('change', handleContextPresetChange);
+
     document.getElementById('temp-slider').addEventListener('input', (e) => {
         const value = parseFloat(e.target.value);
         document.getElementById('temp-value').textContent = value.toFixed(1);
     });
 
-    document.getElementById('ask-button').addEventListener('click', sendFollowUpQuestion);
+    document.getElementById('ask-button').addEventListener('click', handleAskOrStop);
+
+    document.getElementById('copy-current-response').addEventListener('click', handleCopyCurrentResponse);
 
     const followUpInput = document.getElementById('follow-up-input');
 
     followUpInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            sendFollowUpQuestion();
+            handleAskOrStop();
         }
     });
 
@@ -321,6 +379,174 @@ function setupEventListeners() {
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 150) + 'px';
     });
+
+    // Escape: stop an in-flight generation, or close the popup window when idle.
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (isProcessing) {
+            stopGeneration();
+        } else {
+            window.close();
+        }
+    });
+
+    // Focus the input so the user can immediately type a follow-up / press Enter.
+    followUpInput.focus();
+}
+
+// === New helpers ===
+
+function getResponseContent() {
+    return document.getElementById('response-content');
+}
+
+function setResponseContentHtml(html) {
+    const el = getResponseContent();
+    if (el) el.innerHTML = html;
+}
+
+function showLoading(message) {
+    setResponseContentHtml(`<div class="loading">${escapeHtml(message || 'Processing...')}</div>`);
+    showCopyButton(false);
+}
+
+function showCopyButton(visible) {
+    const btn = document.getElementById('copy-current-response');
+    if (btn) btn.style.display = visible ? '' : 'none';
+}
+
+function setProcessing(state) {
+    isProcessing = state;
+    const btn = document.getElementById('ask-button');
+    if (!btn) return;
+    if (state) {
+        btn.textContent = '⏹ Stop';
+        btn.classList.add('stopping');
+        btn.disabled = false;
+    } else {
+        btn.textContent = 'Ask';
+        btn.classList.remove('stopping');
+        btn.disabled = false;
+    }
+}
+
+function stopGeneration() {
+    if (currentAbortController) {
+        try { currentAbortController.abort(); } catch (_) { /* ignore */ }
+    }
+}
+
+function handleAskOrStop() {
+    if (isProcessing) {
+        stopGeneration();
+    } else {
+        sendFollowUpQuestion();
+    }
+}
+
+function getPromptContext() {
+    return {
+        selectedText: initialContext.text,
+        pageUrl: initialContext.sourceUrl,
+        pageTitle: initialContext.sourceTitle
+    };
+}
+
+async function handleContextPresetChange(e) {
+    const newId = e.target.value;
+    const newPreset = currentSettings.contextPresets.find(p => p.id === newId);
+    if (!newPreset) return;
+    if (contextPreset && newPreset.id === contextPreset.id) return;
+
+    if (messages.length > 0) {
+        const ok = confirm(`Switch context preset to "${newPreset.name}"?\n\nThis restarts the conversation from the original text.`);
+        if (!ok) {
+            // revert UI selection
+            e.target.value = contextPreset ? contextPreset.id : '';
+            return;
+        }
+    }
+
+    if (isProcessing) stopGeneration();
+
+    contextPreset = newPreset;
+    messages = [];
+    document.getElementById('message-history').innerHTML = '';
+    lastResponseMarkdown = '';
+    currentStreamingMarkdown = '';
+    showCopyButton(false);
+
+    displayTextPreview(initialContext.text, initialContext.isPageContent);
+
+    await sendToAI(initialContext.text, false);
+}
+
+async function handleCopyCurrentResponse() {
+    const md = lastResponseMarkdown || currentStreamingMarkdown || '';
+    await copyMarkdownTo(document.getElementById('copy-current-response'), md);
+}
+
+async function copyMarkdownTo(btn, md) {
+    if (!md || !btn) return;
+    try {
+        await navigator.clipboard.writeText(md);
+        const original = btn.textContent;
+        btn.textContent = '✓';
+        btn.classList.add('copied');
+        setTimeout(() => {
+            btn.textContent = original;
+            btn.classList.remove('copied');
+        }, 1500);
+    } catch (e) {
+        console.error('Copy failed:', e);
+    }
+}
+
+function attachCopyButtonToHistoryItem(messageDiv, markdown) {
+    const btn = document.createElement('button');
+    btn.className = 'copy-action';
+    btn.title = 'Copy as Markdown';
+    btn.textContent = '📋';
+    btn.dataset.markdown = markdown || '';
+    btn.addEventListener('click', () => copyMarkdownTo(btn, btn.dataset.markdown || ''));
+    messageDiv.insertBefore(btn, messageDiv.firstChild);
+}
+
+function appendUsageFooter(displayElement, usage, durationMs) {
+    if (!displayElement) return;
+    const hasTokens = usage && (usage.inputTokens || usage.outputTokens);
+    if (!hasTokens && !durationMs) return;
+    const div = document.createElement('div');
+    div.className = 'usage-footer';
+    const parts = [];
+    if (usage && usage.inputTokens) parts.push(`↑ ${usage.inputTokens.toLocaleString('ru-RU')}`);
+    if (usage && usage.outputTokens) parts.push(`↓ ${usage.outputTokens.toLocaleString('ru-RU')}`);
+    if (durationMs) parts.push(`${(durationMs / 1000).toFixed(1)}s`);
+    div.textContent = parts.join(' · ');
+    displayElement.appendChild(div);
+}
+
+// Pre-flight token budget check; returns true if OK, otherwise renders the
+// error in the response area and returns false.
+function checkTokenBudgetOrError(allMessages, systemPrompt, useModel) {
+    // Sum the weighted estimate over each real text fragment so Cyrillic/CJK is
+    // counted the same way as the preview (chars/3) rather than as ASCII.
+    let tokens = estimateTokenCount(systemPrompt || '');
+    for (const m of allMessages) {
+        if (m && m.parts) {
+            for (const p of m.parts) tokens += estimateTokenCount(p.text || '');
+        }
+    }
+    const limit = getModelContextLimit(useModel);
+    if (tokens > Math.floor(limit * 0.9)) {
+        showError(
+            'Текст слишком большой для модели',
+            `Оценка ~${tokens.toLocaleString('ru-RU')} токенов. Контекст ${stripModelPrefix(useModel)}: ~${limit.toLocaleString('ru-RU')} токенов.`,
+            'Выдели меньший фрагмент или выбери модель с бо́льшим контекстом.'
+        );
+        return false;
+    }
+    return true;
 }
 
 async function sendFollowUpQuestion() {
@@ -329,23 +555,29 @@ async function sendFollowUpQuestion() {
 
     if (!question || isProcessing) return;
 
-    const responseArea = document.getElementById('response-area');
-    const hasContent = responseArea.children.length > 0;
-    const hasLoading = !!responseArea.querySelector('.loading');
-    const hasError = !!responseArea.querySelector('.error-message');
+    const responseContent = getResponseContent();
+    const hasContent = responseContent && responseContent.children.length > 0;
+    const hasLoading = !!(responseContent && responseContent.querySelector('.loading'));
+    const hasError = !!(responseContent && responseContent.querySelector('.error-message'));
+
     if (hasContent && !hasLoading && !hasError) {
+        // Move current response into history with its own copy button
         const historyDiv = document.getElementById('message-history');
         const modelMessageDiv = document.createElement('div');
         modelMessageDiv.className = 'model-message';
 
-        while (responseArea.firstChild) {
-            modelMessageDiv.appendChild(responseArea.firstChild);
+        while (responseContent.firstChild) {
+            modelMessageDiv.appendChild(responseContent.firstChild);
         }
 
+        attachCopyButtonToHistoryItem(modelMessageDiv, lastResponseMarkdown);
         historyDiv.appendChild(modelMessageDiv);
+        showCopyButton(false);
+        lastResponseMarkdown = '';
+        currentStreamingMarkdown = '';
     } else if (hasError) {
         // Don't carry the error into history; just clear it.
-        responseArea.innerHTML = '';
+        responseContent.innerHTML = '';
     }
 
     addUserMessageToHistory(question);
@@ -378,15 +610,18 @@ async function sendToAI(message, isFollowUp) {
 
 async function sendToGemini(message, isFollowUp) {
     if (!currentSettings.apiKey) {
-        showError('API key not configured. Please open extension settings and add your Gemini API key.');
+        showError('API key not configured', 'No Gemini API key was found in settings.', 'Open extension settings and add your Gemini API key.');
         return;
     }
 
-    isProcessing = true;
-    document.getElementById('ask-button').disabled = true;
+    setProcessing(true);
+    showLoading('Processing...');
 
-    const responseArea = document.getElementById('response-area');
-    responseArea.innerHTML = '<div class="loading">Processing...</div>';
+    const displayElement = getResponseContent();
+    // Claim a sequence number for the whole invocation (including the early
+    // validation returns below) so the finally block always resets state for
+    // the latest request, and stale/superseded callbacks bail out.
+    const mySeq = ++requestSeq;
 
     try {
         let preset;
@@ -415,83 +650,111 @@ async function sendToGemini(message, isFollowUp) {
         }
 
         if (!isFollowUp) {
-            messages = [{
-                role: 'user',
-                parts: [{ text: message }]
-            }];
+            messages = [{ role: 'user', parts: [{ text: message }] }];
         } else {
-            messages.push({
-                role: 'user',
-                parts: [{ text: message }]
-            });
+            messages.push({ role: 'user', parts: [{ text: message }] });
+        }
+
+        const resolvedSystemPrompt = preset.systemPrompt
+            ? applyPromptVariables(preset.systemPrompt, getPromptContext())
+            : '';
+
+        // Pre-flight token budget check
+        if (!checkTokenBudgetOrError(messages, resolvedSystemPrompt, useModel)) {
+            if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+                messages.pop();
+            }
+            return;
         }
 
         const requestBody = {
             contents: messages,
-            generationConfig: {
-                temperature: useTemp
-            }
+            generationConfig: { temperature: useTemp }
         };
 
-        if (preset.systemPrompt) {
+        if (resolvedSystemPrompt) {
             requestBody.systemInstruction = {
                 role: 'user',
-                parts: [{ text: preset.systemPrompt }]
+                parts: [{ text: resolvedSystemPrompt }]
             };
         }
 
         if (useBudget !== 0) {
-            requestBody.generationConfig.thinkingConfig = {
-                thinking_budget: useBudget
-            };
+            requestBody.generationConfig.thinkingConfig = { thinking_budget: useBudget };
         }
 
         const model = addModelPrefix(useModel);
         const url = `https://generativelanguage.googleapis.com/v1beta/${model}:streamGenerateContent?alt=sse&key=${currentSettings.apiKey}`;
 
+        currentAbortController = new AbortController();
+        lastRequestStartedAt = performance.now();
+        currentStreamingMarkdown = '';
+
         const response = await fetch(url, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(requestBody)
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody),
+            signal: currentAbortController.signal
         });
 
         if (!response.ok) {
             const errorText = await response.text();
-            throw new Error(`API Error ${response.status}: ${errorText}`);
+            const err = new Error(parseApiErrorBody(errorText) || `HTTP ${response.status}`);
+            err.status = response.status;
+            err.body = errorText;
+            throw err;
         }
 
-        const fullResponse = await handleStreamingResponse(response, responseArea);
+        const result = await handleStreamingResponse(response, displayElement);
+        const fullResponse = result.content;
+        const usage = result.usage;
+        const duration = performance.now() - lastRequestStartedAt;
 
-        messages.push({
-            role: 'model',
-            parts: [{ text: fullResponse }]
-        });
+        appendUsageFooter(displayElement, usage, duration);
+        lastResponseMarkdown = fullResponse;
+        showCopyButton(!!fullResponse);
+
+        messages.push({ role: 'model', parts: [{ text: fullResponse }] });
 
     } catch (error) {
-        console.error('Gemini API error:', error);
-        if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
-            messages.pop();
+        // A newer request has superseded this one (e.g. preset switch); don't
+        // let this stale callback touch shared state.
+        if (mySeq !== requestSeq) return;
+        if (error.name === 'AbortError' || (error.message && /aborted/i.test(error.message))) {
+            handleAbortedResponse(displayElement);
+        } else {
+            console.error('Gemini API error:', error);
+            if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+                messages.pop();
+            }
+            showApiError(error);
         }
-        showError(formatApiError(error, error.status || 0));
     } finally {
-        isProcessing = false;
-        document.getElementById('ask-button').disabled = false;
+        if (mySeq === requestSeq) {
+            setProcessing(false);
+            currentAbortController = null;
+        }
     }
 }
 
 async function sendToOpenAI(message, isFollowUp) {
     if (!currentSettings.openaiApiKey || !currentSettings.openaiBaseUrl) {
-        showError('OpenAI API key or Base URL not configured. Please open extension settings.');
+        showError(
+            'OpenAI API not configured',
+            'Base URL or API key is missing.',
+            'Open extension settings and fill in OpenAI Base URL and API key.'
+        );
         return;
     }
 
-    isProcessing = true;
-    document.getElementById('ask-button').disabled = true;
+    setProcessing(true);
+    showLoading('Processing...');
 
-    const responseArea = document.getElementById('response-area');
-    responseArea.innerHTML = '<div class="loading">Processing...</div>';
+    const displayElement = getResponseContent();
+    // Claim a sequence number for the whole invocation (including the early
+    // validation returns below) so the finally block always resets state for
+    // the latest request, and stale/superseded callbacks bail out.
+    const mySeq = ++requestSeq;
 
     try {
         let preset;
@@ -520,47 +783,45 @@ async function sendToOpenAI(message, isFollowUp) {
         }
 
         if (!isFollowUp) {
-            messages = [{
-                role: 'user',
-                parts: [{ text: message }]
-            }];
+            messages = [{ role: 'user', parts: [{ text: message }] }];
         } else {
-            messages.push({
-                role: 'user',
-                parts: [{ text: message }]
-            });
+            messages.push({ role: 'user', parts: [{ text: message }] });
+        }
+
+        const resolvedSystemPrompt = preset.systemPrompt
+            ? applyPromptVariables(preset.systemPrompt, getPromptContext())
+            : '';
+
+        // Pre-flight token budget check
+        if (!checkTokenBudgetOrError(messages, resolvedSystemPrompt, useModel)) {
+            if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+                messages.pop();
+            }
+            return;
         }
 
         const openAIMessages = [];
 
-        if (preset.systemPrompt) {
-            openAIMessages.push({
-                role: 'system',
-                content: preset.systemPrompt
-            });
+        if (resolvedSystemPrompt) {
+            openAIMessages.push({ role: 'system', content: resolvedSystemPrompt });
         }
 
         messages.forEach(msg => {
             let role = msg.role;
             if (role === 'model') role = 'assistant';
-
             const content = msg.parts.map(p => p.text).join('');
-
-            openAIMessages.push({
-                role: role,
-                content: content
-            });
+            openAIMessages.push({ role: role, content: content });
         });
 
         const requestBody = {
             model: useModel,
             messages: openAIMessages,
             temperature: useTemp,
-            stream: true
+            stream: true,
+            stream_options: { include_usage: true }
         };
 
         // GLM (Z.AI / Zhipu) supports a top-level `thinking` toggle.
-        // budget === 0 means thinking disabled, anything else enables it.
         if (isGlmModel(useModel)) {
             requestBody.thinking = { type: useBudget === 0 ? 'disabled' : 'enabled' };
         }
@@ -568,36 +829,77 @@ async function sendToOpenAI(message, isFollowUp) {
         const baseUrl = currentSettings.openaiBaseUrl.replace(/\/$/, '');
         const url = `${baseUrl}/chat/completions`;
 
+        currentAbortController = new AbortController();
+        lastRequestStartedAt = performance.now();
+        currentStreamingMarkdown = '';
+
         const response = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${currentSettings.openaiApiKey}`
             },
-            body: JSON.stringify(requestBody)
+            body: JSON.stringify(requestBody),
+            signal: currentAbortController.signal
         });
 
         if (!response.ok) {
             const errorText = await response.text();
-            throw new Error(`API Error ${response.status}: ${errorText}`);
+            const err = new Error(parseApiErrorBody(errorText) || `HTTP ${response.status}`);
+            err.status = response.status;
+            err.body = errorText;
+            throw err;
         }
 
-        const fullResponse = await handleOpenAIStreamingResponse(response, responseArea);
+        const result = await handleOpenAIStreamingResponse(response, displayElement);
+        const fullResponse = result.content;
+        const usage = result.usage;
+        const duration = performance.now() - lastRequestStartedAt;
 
-        messages.push({
-            role: 'model',
-            parts: [{ text: fullResponse }]
-        });
+        appendUsageFooter(displayElement, usage, duration);
+        lastResponseMarkdown = fullResponse;
+        showCopyButton(!!fullResponse);
+
+        messages.push({ role: 'model', parts: [{ text: fullResponse }] });
 
     } catch (error) {
-        console.error('OpenAI API error:', error);
-        if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
-            messages.pop();
+        // A newer request has superseded this one (e.g. preset switch); don't
+        // let this stale callback touch shared state.
+        if (mySeq !== requestSeq) return;
+        if (error.name === 'AbortError' || (error.message && /aborted/i.test(error.message))) {
+            handleAbortedResponse(displayElement);
+        } else {
+            console.error('OpenAI API error:', error);
+            if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+                messages.pop();
+            }
+            showApiError(error);
         }
-        showError(formatApiError(error, error.status || 0));
     } finally {
-        isProcessing = false;
-        document.getElementById('ask-button').disabled = false;
+        if (mySeq === requestSeq) {
+            setProcessing(false);
+            currentAbortController = null;
+        }
+    }
+}
+
+function handleAbortedResponse(displayElement) {
+    // Pop the dangling user message — same as for any other failure.
+    if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+        messages.pop();
+    }
+    if (!displayElement) return;
+    const hasContent = currentStreamingMarkdown && currentStreamingMarkdown.length > 0;
+    if (hasContent) {
+        // Keep partial content + a stopped marker; allow copy of partial.
+        const marker = document.createElement('div');
+        marker.className = 'stopped-marker';
+        marker.textContent = '⏹ Остановлено пользователем';
+        displayElement.appendChild(marker);
+        lastResponseMarkdown = currentStreamingMarkdown;
+        showCopyButton(true);
+    } else {
+        showError('Остановлено', 'Запрос отменён до начала ответа.');
     }
 }
 
@@ -607,6 +909,8 @@ async function handleStreamingResponse(response, displayElement) {
 
     let buffer = '';
     let fullContent = '';
+    let inputTokens = 0;
+    let outputTokens = 0;
 
     displayElement.innerHTML = '';
 
@@ -626,6 +930,10 @@ async function handleStreamingResponse(response, displayElement) {
 
                 try {
                     const data = JSON.parse(jsonStr);
+                    if (data && data.usageMetadata) {
+                        inputTokens = data.usageMetadata.promptTokenCount || inputTokens;
+                        outputTokens = data.usageMetadata.candidatesTokenCount || outputTokens;
+                    }
                     const candidate = data?.candidates?.[0];
 
                     if (!candidate) continue;
@@ -650,7 +958,7 @@ async function handleStreamingResponse(response, displayElement) {
         }
     }
 
-    return fullContent;
+    return { content: fullContent, usage: { inputTokens: inputTokens, outputTokens: outputTokens } };
 }
 
 async function handleOpenAIStreamingResponse(response, displayElement) {
@@ -659,6 +967,8 @@ async function handleOpenAIStreamingResponse(response, displayElement) {
 
     let buffer = '';
     let fullContent = '';
+    let inputTokens = 0;
+    let outputTokens = 0;
 
     displayElement.innerHTML = '';
 
@@ -680,6 +990,10 @@ async function handleOpenAIStreamingResponse(response, displayElement) {
 
             try {
                 const data = JSON.parse(jsonStr);
+                if (data && data.usage) {
+                    inputTokens = data.usage.prompt_tokens || inputTokens;
+                    outputTokens = data.usage.completion_tokens || outputTokens;
+                }
                 const delta = data.choices?.[0]?.delta;
 
                 if (delta?.content) {
@@ -693,10 +1007,12 @@ async function handleOpenAIStreamingResponse(response, displayElement) {
         }
     }
 
-    return fullContent;
+    return { content: fullContent, usage: { inputTokens: inputTokens, outputTokens: outputTokens } };
 }
 
 function renderContent(content, element) {
+    currentStreamingMarkdown = content;
+
     const thinkingBlocks = [];
     let processedContent = content;
 
@@ -709,7 +1025,7 @@ function renderContent(content, element) {
             content: thinkingContent.trim(),
             isOpen: false
         });
-        return `\n\n${id}\n\n`; // Add newlines to ensure it's treated as a block
+        return `\n\n${id}\n\n`;
     });
 
     // 2. Handle open block at the end (for streaming)
@@ -720,7 +1036,6 @@ function renderContent(content, element) {
         const thinkingContent = openMatch[1];
         const id = `THINKING_BLOCK_${thinkingBlocks.length}_PLACEHOLDER`;
 
-        // Replace the open tag and content with placeholder
         processedContent = processedContent.substring(0, openMatch.index) + `\n\n${id}\n\n`;
 
         thinkingBlocks.push({
@@ -741,7 +1056,6 @@ function renderContent(content, element) {
             .replace(/'/g, '&#039;');
 
         const summaryText = block.isOpen ? '💭 Thinking...' : '💭 Thought Process';
-        // Auto-open if it's currently streaming (open)
         const detailsAttribute = block.isOpen ? ' open' : '';
 
         const thinkingHtml = `
@@ -757,9 +1071,49 @@ function renderContent(content, element) {
     element.innerHTML = html;
 }
 
-function showError(message) {
-    const responseArea = document.getElementById('response-area');
-    responseArea.innerHTML = `<div class="error-message">${message}</div>`;
+// Rich error display: title (always shown), optional detail, optional hint.
+// Backwards-compatible: showError('msg') still works as before.
+function showError(title, detail, hint) {
+    const html = `
+        <div class="error-message">
+            <strong>⚠️ ${escapeHtml(title || 'Error')}</strong>
+            ${detail ? `<div class="error-detail">${escapeHtml(detail)}</div>` : ''}
+            ${hint ? `<div class="error-hint">→ ${escapeHtml(hint)}</div>` : ''}
+        </div>
+    `;
+    setResponseContentHtml(html);
+    showCopyButton(false);
+}
+
+function showApiError(error) {
+    const status = error && error.status ? error.status : 0;
+    const bodyDetail = error && error.body ? parseApiErrorBody(error.body) : (error && error.message) || '';
+
+    let title, hint;
+    if (status === 401 || status === 403) {
+        title = 'Ошибка авторизации';
+        hint = 'Проверь API-ключ в настройках расширения.';
+    } else if (status === 429) {
+        title = 'Лимит запросов';
+        hint = 'Подожди минуту и попробуй снова, либо переключи модель.';
+    } else if (status === 400) {
+        title = 'Неверный запрос';
+        hint = 'Возможно, превышен контекст или передан неподдерживаемый параметр. Попробуй меньший текст или другую модель.';
+    } else if (status === 404) {
+        title = 'Не найдено';
+        hint = 'Проверь имя модели и Base URL в настройках.';
+    } else if (status >= 500) {
+        title = 'Сбой сервера провайдера';
+        hint = 'Подожди и попробуй снова. Если повторяется — проверь статус провайдера.';
+    } else if (status === 0) {
+        title = 'Сеть недоступна';
+        hint = 'Проверь интернет-соединение и Base URL.';
+    } else {
+        title = `Ошибка (HTTP ${status})`;
+        hint = '';
+    }
+
+    showError(title, bodyDetail, hint);
 }
 
 chrome.storage.onChanged.addListener(async (changes, area) => {
@@ -789,4 +1143,3 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
         }
     }
 });
-

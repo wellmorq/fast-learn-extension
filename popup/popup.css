@@ -60,7 +60,7 @@ body {
     padding: 12px 8px;
     border-bottom: 1px solid var(--border-color);
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: 6px;
     flex-shrink: 0;
 }
@@ -155,6 +155,55 @@ select:focus {
     min-height: 150px;
     box-shadow: var(--shadow-sm);
     margin-bottom: 12px;
+    position: relative;
+}
+
+.copy-action {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: var(--bg-button);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+    padding: 3px 7px;
+    font-size: 14px;
+    line-height: 1.2;
+    color: var(--text-primary);
+    opacity: 0.55;
+    transition: opacity 0.15s, background-color 0.15s;
+    z-index: 2;
+}
+
+.copy-action:hover {
+    opacity: 1;
+    background-color: var(--bg-button-hover);
+}
+
+.copy-action.copied {
+    opacity: 1;
+    color: #137333;
+    border-color: #34a853;
+}
+
+.usage-footer {
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border-color);
+    font-size: calc(var(--base-font-size) * 0.75);
+    color: var(--text-secondary);
+    font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+    opacity: 0.85;
+}
+
+.stopped-marker {
+    margin-top: 12px;
+    padding: 6px 10px;
+    border-left: 3px solid #c5221f;
+    background-color: rgba(197, 34, 31, 0.06);
+    color: #c5221f;
+    font-size: calc(var(--base-font-size) * 0.85);
+    border-radius: 3px;
 }
 
 .response-area h1,
@@ -342,6 +391,7 @@ select:focus {
     padding: 14px;
     box-shadow: var(--shadow-sm);
     margin-bottom: 12px;
+    position: relative;
 }
 
 .model-message:last-child {
@@ -486,6 +536,14 @@ select:focus {
     cursor: not-allowed;
 }
 
+.ask-button.stopping {
+    background-color: #c5221f;
+}
+
+.ask-button.stopping:hover {
+    background-color: #a51812;
+}
+
 .loading {
     color: var(--text-secondary);
     font-style: italic;
@@ -501,6 +559,37 @@ select:focus {
     border-left: 4px solid #c5221f;
     margin-bottom: 10px;
 }
+
+.error-message strong {
+    display: block;
+    margin-bottom: 4px;
+    color: #c5221f;
+    font-size: calc(var(--base-font-size) * 1.0);
+}
+
+.error-detail {
+    font-size: calc(var(--base-font-size) * 0.9);
+    color: #5f6368;
+    margin: 4px 0;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+}
+
+.error-hint {
+    font-size: calc(var(--base-font-size) * 0.85);
+    color: #1967d2;
+    margin-top: 6px;
+    font-style: italic;
+}
+
+:root[data-theme="dracula"] .error-message {
+    background-color: rgba(255, 85, 85, 0.15);
+    color: #ff5555;
+    border-left-color: #ff5555;
+}
+:root[data-theme="dracula"] .error-message strong { color: #ff5555; }
+:root[data-theme="dracula"] .error-detail { color: #f8f8f2; }
+:root[data-theme="dracula"] .error-hint { color: #8be9fd; }
 
 ::-webkit-scrollbar {
     width: 8px;

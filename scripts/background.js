@@ -180,7 +180,7 @@ async function initializeDefaultSettings(scope = 'all') {
         update.initialized = true;
         update.apiProvider = 'openai';
         update.openaiBaseUrl = 'https://api.z.ai/api/paas/v4';
-        update.defaultModel = 'glm-4.6';
+        update.defaultModel = 'glm-5.1';
         update.fontSize = '16px';
         update.fontFamily = 'Roboto';
         update.colorTheme = 'soft-gray';
@@ -263,7 +263,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         await chrome.storage.local.set({
             selectedText: textToProcess,
             isPageContent: isPageContent,
-            selectedPresetId: presetId
+            selectedPresetId: presetId,
+            sourceUrl: (tab && tab.url) || '',
+            sourceTitle: (tab && tab.title) || ''
         });
 
         createPopup();
@@ -310,7 +312,9 @@ chrome.commands.onCommand.addListener(async (command) => {
             if (textToProcess) {
                 await chrome.storage.local.set({
                     selectedText: textToProcess,
-                    isPageContent: isPageContent
+                    isPageContent: isPageContent,
+                    sourceUrl: tab.url || '',
+                    sourceTitle: tab.title || ''
                 });
                 createPopup();
             }

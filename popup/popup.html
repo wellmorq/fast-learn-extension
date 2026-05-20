@@ -11,8 +11,15 @@
 </head>
 
 <body>
-    <!-- Controls panel (moved to top) -->
+    <!-- Controls panel -->
     <div class="controls">
+        <div class="control-group">
+            <label class="control-label">Context:</label>
+            <select id="context-preset-select" title="Context Preset (changing resets the chat)">
+                <option value="">Loading...</option>
+            </select>
+        </div>
+
         <div class="control-group">
             <label class="control-label">Follow-up:</label>
             <select id="followup-preset-select" title="Follow-up Preset">
@@ -43,7 +50,10 @@
 
         <!-- Response area -->
         <div class="response-area" id="response-area">
-            <div class="loading">Loading...</div>
+            <button class="copy-action" id="copy-current-response" title="Copy as Markdown" style="display:none">📋</button>
+            <div class="response-content" id="response-content">
+                <div class="loading">Loading...</div>
+            </div>
         </div>
     </div>
 

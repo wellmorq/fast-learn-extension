@@ -276,22 +276,21 @@ function setupPresetEventListeners(element, preset, index, type) {
 }
 
 async function loadModels() {
-    const modelSelect = document.getElementById('default-model');
-    const { cachedModels: cached, defaultModel } = await chrome.storage.local.get(['cachedModels', 'defaultModel']);
+    const provider = document.getElementById('api-provider').value;
+    const { cachedModels: cached, cachedModelsProvider, defaultModel } =
+        await chrome.storage.local.get(['cachedModels', 'cachedModelsProvider', 'defaultModel']);
 
-    if (cached && cached.length > 0) {
+    // Ignore a cache that belongs to a different provider (older caches without
+    // a provider tag are still trusted to avoid a forced refresh).
+    const cacheUsable = cached && cached.length > 0 &&
+        (!cachedModelsProvider || cachedModelsProvider === provider);
+
+    if (cacheUsable) {
         cachedModels = cached;
         populateDefaultModelSelect(cachedModels, defaultModel);
     } else {
-        const defaultModels = [
-            'gemini-2.0-flash-exp',
-            'gemini-2.0-flash-thinking-exp-01-21',
-            'gemini-exp-1206',
-            'gemini-1.5-pro',
-            'gemini-1.5-flash'
-        ];
-        cachedModels = defaultModels;
-        populateDefaultModelSelect(defaultModels, defaultModel);
+        cachedModels = getFallbackModels(provider, defaultModel);
+        populateDefaultModelSelect(cachedModels, defaultModel);
     }
 }
 
@@ -355,7 +354,7 @@ async function fetchModelsFromGoogle() {
         }
 
         cachedModels = textModels;
-        await chrome.storage.local.set({ cachedModels: textModels });
+        await chrome.storage.local.set({ cachedModels: textModels, cachedModelsProvider: 'google' });
 
         const currentModel = document.getElementById('default-model').value;
         populateDefaultModelSelect(textModels, currentModel);
@@ -410,7 +409,7 @@ async function fetchModelsFromOpenAI() {
         }
 
         cachedModels = textModels;
-        await chrome.storage.local.set({ cachedModels: textModels });
+        await chrome.storage.local.set({ cachedModels: textModels, cachedModelsProvider: 'openai' });
 
         const currentModel = document.getElementById('default-model').value;
         populateDefaultModelSelect(textModels, currentModel);
@@ -485,9 +484,12 @@ function setupEventListeners() {
         const provider = e.target.value;
         toggleProviderSettings(provider);
 
-        const modelSelect = document.getElementById('default-model');
-        modelSelect.innerHTML = '<option value="">Provider changed - please refresh models</option>';
-        cachedModels = [];
+        // Show provider-appropriate fallback models right away so the page stays
+        // usable (and savable) before the user refreshes the live list.
+        cachedModels = getFallbackModels(provider, currentSettings.defaultModel);
+        populateDefaultModelSelect(cachedModels, '');
+        renderPresets('context');
+        renderPresets('followup');
     });
 
     document.querySelectorAll('.tab-button').forEach(button => {
