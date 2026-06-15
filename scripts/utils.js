@@ -69,13 +69,15 @@ function geminiSupportsThinking(modelName) {
 function getFallbackModels(provider, defaultModel) {
     if (provider === 'google') {
         return [
-            'gemini-2.5-flash',
-            'gemini-2.5-pro',
-            'gemini-2.5-flash-lite',
-            'gemini-2.0-flash'
+            'gemini-3.5-pro',
+            'gemini-3.5-flash',
+            'gemini-3.5',
+            'gemini-3-pro',
+            'gemini-3-flash',
+            'gemini-3'
         ];
     }
-    const base = ['glm-5.1', 'glm-4.6', 'glm-4.5-air', 'glm-4.5', 'glm-4.5v', 'glm-4-plus', 'glm-4'];
+    const base = ['glm-5.2', 'glm-5.1', 'glm-5-turbo'];
     if (defaultModel && !base.includes(defaultModel)) base.unshift(defaultModel);
     return base;
 }
@@ -101,25 +103,12 @@ function applyPromptVariables(prompt, ctx) {
 // Approximate context windows by model family (used for pre-flight token warnings).
 // Keys are matched as substrings against lowercased model name; longest match wins.
 const MODEL_CONTEXT_LIMITS = {
+    'glm-5.2': 200000,
     'glm-5.1': 200000,
+    'glm-5-turbo': 200000,
     'glm-5': 200000,
-    'glm-4.6': 200000,
-    'glm-4.5-air': 128000,
-    'glm-4.5v': 65536,
-    'glm-4.5': 128000,
-    'glm-4-plus': 128000,
-    'glm-4': 128000,
-    'gemini-3': 1048576,
-    'gemini-2.5-pro': 1048576,
-    'gemini-2.5-flash': 1048576,
-    'gemini-2.5': 1048576,
-    'gemini-2.0-flash': 1048576,
-    'gemini-2.0': 1048576,
-    'gemini-1.5-pro': 2097152,
-    'gemini-1.5-flash': 1048576,
-    'gemini-flash-lite': 1048576,
-    'gemini-flash': 1048576,
-    'gemini-pro': 32768
+    'gemini-3.5': 1048576,
+    'gemini-3': 1048576
 };
 
 function getModelContextLimit(modelName) {
