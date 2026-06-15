@@ -582,6 +582,24 @@ select:focus {
     font-style: italic;
 }
 
+.retry-button {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 4px 12px;
+    border: 1px solid #c5221f;
+    border-radius: 4px;
+    background: transparent;
+    color: #c5221f;
+    font-size: calc(var(--base-font-size) * 0.85);
+    font-family: var(--font-family);
+    cursor: pointer;
+}
+
+.retry-button:hover {
+    background-color: #c5221f;
+    color: #fff;
+}
+
 :root[data-theme="dracula"] .error-message {
     background-color: rgba(255, 85, 85, 0.15);
     color: #ff5555;
@@ -590,6 +608,8 @@ select:focus {
 :root[data-theme="dracula"] .error-message strong { color: #ff5555; }
 :root[data-theme="dracula"] .error-detail { color: #f8f8f2; }
 :root[data-theme="dracula"] .error-hint { color: #8be9fd; }
+:root[data-theme="dracula"] .retry-button { border-color: #ff5555; color: #ff5555; }
+:root[data-theme="dracula"] .retry-button:hover { background-color: #ff5555; color: #282a36; }
 
 ::-webkit-scrollbar {
     width: 8px;

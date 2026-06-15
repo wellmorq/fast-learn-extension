@@ -2,57 +2,6 @@ function generateId() {
     return Date.now().toString(36) + Math.random().toString(36).substr(2);
 }
 
-function cleanMarkdown(markdown) {
-    if (!markdown) return '';
-
-    let cleaned = markdown.replace(/\n{3,}/g, '\n\n');
-    cleaned = cleaned.replace(/[ \t]+$/gm, '');
-    cleaned = cleaned.trim();
-
-    return cleaned;
-}
-
-function htmlToMarkdown(html) {
-    if (typeof TurndownService === 'undefined') {
-        console.error('TurndownService not loaded');
-        return html;
-    }
-
-    const turndownService = new TurndownService({
-        headingStyle: 'atx',
-        hr: '---',
-        bulletListMarker: '-',
-        codeBlockStyle: 'fenced',
-        emDelimiter: '*'
-    });
-
-    turndownService.addRule('cleanParagraphs', {
-        filter: ['p', 'div'],
-        replacement: function (content) {
-            return content.trim() + '\n\n';
-        }
-    });
-
-    turndownService.remove(['script', 'style', 'iframe', 'noscript']);
-
-    const markdown = turndownService.turndown(html);
-    return cleanMarkdown(markdown);
-}
-
-function formatApiError(error, status) {
-    const errorMessages = {
-        400: 'Invalid request. Check your settings.',
-        401: 'Invalid API key. Check the key in settings.',
-        403: 'Access forbidden. Check API key permissions.',
-        429: 'Rate limit exceeded. Try again later.',
-        500: 'Gemini server error. Try again later.',
-        503: 'Gemini service temporarily unavailable.'
-    };
-
-    const message = errorMessages[status] || `Error: ${error.message}`;
-    return `❌ ${message}`;
-}
-
 function validateThinkingBudget(value) {
     const num = parseInt(value);
     if (isNaN(num)) return -1;
@@ -67,6 +16,14 @@ function validateTemperature(value) {
     if (num < 0) return 0;
     if (num > 2.0) return 2.0;
     return num;
+}
+
+// Settings store a bare family name; wrap it with system fallbacks so the UI
+// degrades gracefully when the font isn't installed (Google Fonts is not
+// loaded from the network anymore).
+function buildFontStack(fontFamily) {
+    const primary = (fontFamily || 'Roboto').replace(/['"]/g, '');
+    return `'${primary}', -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif`;
 }
 
 function stripModelPrefix(modelName) {
@@ -99,17 +56,23 @@ function isGlmModel(modelName) {
     return /^glm[-_]/i.test(modelName);
 }
 
+// thinkingConfig is only accepted by Gemini 2.5+ models; sending it to older
+// ones (1.5/2.0) makes the API reject the whole request with HTTP 400.
+function geminiSupportsThinking(modelName) {
+    const name = stripModelPrefix(modelName || '').toLowerCase();
+    return /gemini-(2\.5|[3-9])/.test(name) || name.includes('thinking');
+}
+
 // Provider-appropriate model list to show before a live model list is fetched.
 // GLM/Z.AI is the primary provider, so the OpenAI-compatible branch lists GLM
 // models (configured default first) rather than Gemini ones.
 function getFallbackModels(provider, defaultModel) {
     if (provider === 'google') {
         return [
-            'gemini-2.0-flash-exp',
-            'gemini-2.0-flash-thinking-exp-01-21',
-            'gemini-exp-1206',
-            'gemini-1.5-pro',
-            'gemini-1.5-flash'
+            'gemini-2.5-flash',
+            'gemini-2.5-pro',
+            'gemini-2.5-flash-lite',
+            'gemini-2.0-flash'
         ];
     }
     const base = ['glm-5.1', 'glm-4.6', 'glm-4.5-air', 'glm-4.5', 'glm-4.5v', 'glm-4-plus', 'glm-4'];
@@ -146,6 +109,10 @@ const MODEL_CONTEXT_LIMITS = {
     'glm-4.5': 128000,
     'glm-4-plus': 128000,
     'glm-4': 128000,
+    'gemini-3': 1048576,
+    'gemini-2.5-pro': 1048576,
+    'gemini-2.5-flash': 1048576,
+    'gemini-2.5': 1048576,
     'gemini-2.0-flash': 1048576,
     'gemini-2.0': 1048576,
     'gemini-1.5-pro': 2097152,

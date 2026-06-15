@@ -70,7 +70,7 @@ function applyTheme() {
     const colorTheme = currentSettings.colorTheme || 'soft-gray';
 
     document.documentElement.style.setProperty('--base-font-size', fontSize);
-    document.documentElement.style.setProperty('--font-family', fontFamily);
+    document.documentElement.style.setProperty('--font-family', buildFontStack(fontFamily));
     document.documentElement.setAttribute('data-theme', colorTheme);
 }
 
@@ -485,9 +485,13 @@ function setupEventListeners() {
         toggleProviderSettings(provider);
 
         // Show provider-appropriate fallback models right away so the page stays
-        // usable (and savable) before the user refreshes the live list.
-        cachedModels = getFallbackModels(provider, currentSettings.defaultModel);
-        populateDefaultModelSelect(cachedModels, '');
+        // usable (and savable) before the user refreshes the live list. Keep the
+        // saved default model only when it belongs to this provider — otherwise
+        // a Gemini model would land at the top of the GLM list (and vice versa).
+        const savedProvider = currentSettings.apiProvider || 'google';
+        const keepDefault = provider === savedProvider ? currentSettings.defaultModel : undefined;
+        cachedModels = getFallbackModels(provider, keepDefault);
+        populateDefaultModelSelect(cachedModels, keepDefault || '');
         renderPresets('context');
         renderPresets('followup');
     });
@@ -687,8 +691,13 @@ function showStatus(message, type = 'info') {
     }, 5000);
 }
 
+// Escapes quotes too (the innerHTML trick doesn't) — the result is inserted
+// into attribute contexts like value="...", not just text nodes.
 function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return String(text ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }

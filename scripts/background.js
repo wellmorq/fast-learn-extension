@@ -3,16 +3,91 @@ importScripts('utils.js');
 let lastWindowLeft, lastWindowTop, popupWidth, popupHeight;
 let popupWindowId = null;
 
+// Settings replicated to chrome.storage.sync (cross-device). API keys stay
+// local-only by design; transient state (selection, window bounds, model
+// cache) is machine-specific and isn't synced either.
+const SYNCED_SETTINGS_KEYS = [
+    'apiProvider',
+    'openaiBaseUrl',
+    'defaultModel',
+    'defaultContextPresetId',
+    'defaultFollowupPresetId',
+    'fontSize',
+    'fontFamily',
+    'colorTheme',
+    'contextPresets',
+    'followupPresets'
+];
+
 chrome.runtime.onInstalled.addListener(async (details) => {
     try {
+        await restoreFromSyncIfAvailable();
         await ensurePresetsExist();
         await createContextMenu();
+        scheduleMirrorToSync();
         // One-time cleanup of diagnostics keys from older versions
         await chrome.storage.local.remove(['appLogs', 'lastTestResults', 'lastTestRunAt']);
     } catch (error) {
         console.error('onInstalled failed:', error);
     }
 });
+
+// Fresh install on a machine where sync already has settings (e.g. a second
+// computer): seed local storage from sync instead of factory defaults.
+async function restoreFromSyncIfAvailable() {
+    const local = await chrome.storage.local.get(['contextPresets']);
+    if (local.contextPresets && local.contextPresets.length > 0) return;
+
+    try {
+        const synced = await chrome.storage.sync.get(SYNCED_SETTINGS_KEYS);
+        if (!synced.contextPresets || synced.contextPresets.length === 0) return;
+
+        const update = {};
+        for (const key of SYNCED_SETTINGS_KEYS) {
+            if (synced[key] !== undefined) update[key] = synced[key];
+        }
+        update.initialized = true;
+        await chrome.storage.local.set(update);
+        console.log('Settings restored from chrome.storage.sync');
+    } catch (error) {
+        console.warn('Restore from sync failed:', error);
+    }
+}
+
+// Local storage stays the single source of truth that all pages read/write;
+// sync is a best-effort replica. Debounced because preset edits arrive as a
+// burst of onChanged events.
+let mirrorTimer = null;
+
+function scheduleMirrorToSync() {
+    if (mirrorTimer) clearTimeout(mirrorTimer);
+    mirrorTimer = setTimeout(() => {
+        mirrorTimer = null;
+        mirrorLocalToSync();
+    }, 1000);
+}
+
+async function mirrorLocalToSync() {
+    try {
+        const local = await chrome.storage.local.get(SYNCED_SETTINGS_KEYS);
+        const synced = await chrome.storage.sync.get(SYNCED_SETTINGS_KEYS);
+
+        for (const key of SYNCED_SETTINGS_KEYS) {
+            if (local[key] === undefined) continue;
+            if (JSON.stringify(local[key]) === JSON.stringify(synced[key])) continue;
+            try {
+                // Per-key writes so one oversized item (sync caps items at
+                // ~8 KB — possible with very long system prompts) doesn't
+                // block the rest of the settings from syncing.
+                await chrome.storage.sync.set({ [key]: local[key] });
+            } catch (error) {
+                console.warn(`Sync mirror failed for "${key}":`, error.message);
+            }
+        }
+    } catch (error) {
+        console.warn('Sync mirror failed:', error.message);
+    }
+}
 
 async function ensurePresetsExist() {
     const storage = await chrome.storage.local.get(['contextPresets', 'followupPresets', 'initialized']);
@@ -272,56 +347,68 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
 });
 
-chrome.commands.onCommand.addListener(async (command) => {
-    if (command === "fast-learn-lookup") {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+// Shared lookup flow for the keyboard shortcut and the toolbar button:
+// use the current selection if any, otherwise extract the whole page.
+async function runLookupOnTab(tab) {
+    try {
+        const [{ result }] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            function: () => window.getSelection().toString()
+        });
 
-        if (!tab || !tab.id) {
-            console.warn('No active tab for keyboard shortcut');
-            return;
-        }
+        let textToProcess = '';
+        let isPageContent = false;
 
-        try {
-            const [{ result }] = await chrome.scripting.executeScript({
+        if (result && result.trim()) {
+            textToProcess = result.trim();
+        } else {
+            const results = await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
-                function: () => window.getSelection().toString()
+                files: ['libs/readability.min.js', 'libs/turndown.min.js', 'scripts/content.js']
             });
 
-            let textToProcess = '';
-            let isPageContent = false;
-
-            if (result && result.trim()) {
-                textToProcess = result.trim();
-            } else {
-                const results = await chrome.scripting.executeScript({
-                    target: { tabId: tab.id },
-                    files: ['libs/readability.min.js', 'libs/turndown.min.js', 'scripts/content.js']
-                });
-
-                if (results && results[0] && results[0].result) {
-                    const extractResult = results[0].result;
-                    if (extractResult.success) {
-                        textToProcess = extractResult.content;
-                        isPageContent = true;
-                    } else {
-                        textToProcess = `Error: ${extractResult.error}`;
-                    }
+            if (results && results[0] && results[0].result) {
+                const extractResult = results[0].result;
+                if (extractResult.success) {
+                    textToProcess = extractResult.content;
+                    isPageContent = true;
+                } else {
+                    textToProcess = `Error: ${extractResult.error}`;
                 }
             }
-
-            if (textToProcess) {
-                await chrome.storage.local.set({
-                    selectedText: textToProcess,
-                    isPageContent: isPageContent,
-                    sourceUrl: tab.url || '',
-                    sourceTitle: tab.title || ''
-                });
-                createPopup();
-            }
-        } catch (error) {
-            console.error('Keyboard shortcut error:', error);
         }
+
+        if (textToProcess) {
+            await chrome.storage.local.set({
+                selectedText: textToProcess,
+                isPageContent: isPageContent,
+                // Clear any preset id left over from a context-menu invocation
+                // so this popup opens with the default preset.
+                selectedPresetId: null,
+                sourceUrl: tab.url || '',
+                sourceTitle: tab.title || ''
+            });
+            createPopup();
+        }
+    } catch (error) {
+        console.error('Lookup error:', error);
     }
+}
+
+chrome.commands.onCommand.addListener(async (command) => {
+    if (command !== "fast-learn-lookup") return;
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) {
+        console.warn('No active tab for keyboard shortcut');
+        return;
+    }
+    await runLookupOnTab(tab);
+});
+
+chrome.action.onClicked.addListener(async (tab) => {
+    if (!tab || !tab.id) return;
+    await runLookupOnTab(tab);
 });
 
 function calculateWindowParams(screenWidth, screenHeight) {
@@ -334,10 +421,19 @@ function calculateWindowParams(screenWidth, screenHeight) {
     popupHeight = Math.round((screenHeight / referenceHeight) * 850);
 }
 
-async function saveWindowSettings(left, top, width, height) {
-    await chrome.storage.local.set({
-        windowSettings: { left, top, width, height }
-    });
+// onBoundsChanged fires continuously while the user drags/resizes the window;
+// debounce so only the final geometry hits storage. The pending event keeps
+// the service worker alive long enough for the short timer to fire.
+let saveBoundsTimer = null;
+
+function saveWindowSettings(left, top, width, height) {
+    if (saveBoundsTimer) clearTimeout(saveBoundsTimer);
+    saveBoundsTimer = setTimeout(() => {
+        saveBoundsTimer = null;
+        chrome.storage.local.set({
+            windowSettings: { left, top, width, height }
+        });
+    }, 500);
 }
 
 async function loadWindowSettings() {
@@ -375,20 +471,35 @@ async function createPopup() {
             left: lastWindowLeft,
             top: lastWindowTop
         }, (win) => {
-            if (win) popupWindowId = win.id;
+            if (win) {
+                popupWindowId = win.id;
+                // Survives service worker restarts (in-memory globals don't),
+                // so bounds tracking keeps working while the popup stays open.
+                chrome.storage.session.set({ popupWindowId: win.id });
+            }
         });
     });
 }
 
-chrome.windows.onRemoved.addListener((windowId) => {
+async function getPopupWindowId() {
+    if (popupWindowId !== null) return popupWindowId;
+    const { popupWindowId: storedId } = await chrome.storage.session.get('popupWindowId');
+    return storedId ?? null;
+}
+
+chrome.windows.onRemoved.addListener(async (windowId) => {
     if (windowId === popupWindowId) popupWindowId = null;
+    const { popupWindowId: storedId } = await chrome.storage.session.get('popupWindowId');
+    if (storedId === windowId) await chrome.storage.session.remove('popupWindowId');
 });
 
-chrome.windows.onBoundsChanged.addListener(function (window) {
-    if (popupWindowId !== null && window.id !== popupWindowId) return;
-    if (window.type === "popup" && window.width && window.height) {
-        saveWindowSettings(window.left, window.top, window.width, window.height);
-    }
+chrome.windows.onBoundsChanged.addListener(async (window) => {
+    if (window.type !== "popup" || !window.width || !window.height) return;
+    // Only persist bounds of OUR popup — without this check, moving any other
+    // popup-type window (e.g. a site's OAuth window) would overwrite settings.
+    const ourId = await getPopupWindowId();
+    if (window.id !== ourId) return;
+    saveWindowSettings(window.left, window.top, window.width, window.height);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -414,10 +525,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
-chrome.storage.onChanged.addListener((changes, areaName) => {
+chrome.storage.onChanged.addListener(async (changes, areaName) => {
     if (areaName === 'local') {
         if (changes.contextPresets || changes.defaultContextPresetId) {
             createContextMenu();
+        }
+        if (SYNCED_SETTINGS_KEYS.some(key => changes[key])) {
+            scheduleMirrorToSync();
+        }
+        return;
+    }
+
+    if (areaName === 'sync') {
+        // A change arrived from another device — apply it to local storage.
+        // The deep-equal guard breaks the echo cycle: our own mirror writes
+        // come back here with values identical to local and are skipped.
+        try {
+            const local = await chrome.storage.local.get(SYNCED_SETTINGS_KEYS);
+            const update = {};
+            for (const key of SYNCED_SETTINGS_KEYS) {
+                if (!changes[key] || changes[key].newValue === undefined) continue;
+                if (JSON.stringify(changes[key].newValue) === JSON.stringify(local[key])) continue;
+                update[key] = changes[key].newValue;
+            }
+            if (Object.keys(update).length > 0) {
+                await chrome.storage.local.set(update);
+            }
+        } catch (error) {
+            console.warn('Applying synced settings failed:', error);
         }
     }
 });

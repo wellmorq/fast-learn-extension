@@ -23,6 +23,8 @@ let lastResponseMarkdown = '';
 let currentStreamingMarkdown = '';
 // performance.now() timestamp of last fetch start, used for usage footer duration.
 let lastRequestStartedAt = 0;
+// Last sendToAI invocation, so the Retry button on error/abort can re-fire it.
+let lastRequest = null;
 
 function escapeHtml(text) {
     const div = document.createElement('div');
@@ -104,7 +106,7 @@ async function loadSettings() {
 
 function applyFontSettings() {
     document.documentElement.style.setProperty('--base-font-size', currentSettings.fontSize);
-    document.documentElement.style.setProperty('--font-family', currentSettings.fontFamily);
+    document.documentElement.style.setProperty('--font-family', buildFontStack(currentSettings.fontFamily));
     document.documentElement.setAttribute('data-theme', currentSettings.colorTheme);
 }
 
@@ -599,6 +601,7 @@ function addUserMessageToHistory(message) {
 }
 
 async function sendToAI(message, isFollowUp) {
+    lastRequest = { message, isFollowUp };
     const provider = currentSettings.apiProvider;
 
     if (provider === 'google') {
@@ -606,6 +609,11 @@ async function sendToAI(message, isFollowUp) {
     } else {
         await sendToOpenAI(message, isFollowUp);
     }
+}
+
+async function retryLastRequest() {
+    if (!lastRequest || isProcessing) return;
+    await sendToAI(lastRequest.message, lastRequest.isFollowUp);
 }
 
 async function sendToGemini(message, isFollowUp) {
@@ -679,7 +687,7 @@ async function sendToGemini(message, isFollowUp) {
             };
         }
 
-        if (useBudget !== 0) {
+        if (useBudget !== 0 && geminiSupportsThinking(useModel)) {
             requestBody.generationConfig.thinkingConfig = { thinking_budget: useBudget };
         }
 
@@ -899,7 +907,7 @@ function handleAbortedResponse(displayElement) {
         lastResponseMarkdown = currentStreamingMarkdown;
         showCopyButton(true);
     } else {
-        showError('Остановлено', 'Запрос отменён до начала ответа.');
+        showError('Остановлено', 'Запрос отменён до начала ответа.', '', { retry: retryLastRequest });
     }
 }
 
@@ -945,9 +953,15 @@ async function handleStreamingResponse(response, displayElement) {
                         }
                     }
 
-                    const part = candidate.content?.parts?.[0];
-                    if (part?.text) {
-                        fullContent += part.text;
+                    // A chunk may carry several parts (and thought parts when
+                    // thinking is on) — concatenate all text, skip thoughts.
+                    let chunkText = '';
+                    for (const part of candidate.content?.parts || []) {
+                        if (part.thought) continue;
+                        if (part.text) chunkText += part.text;
+                    }
+                    if (chunkText) {
+                        fullContent += chunkText;
                         renderContent(fullContent, displayElement);
                     }
 
@@ -961,12 +975,22 @@ async function handleStreamingResponse(response, displayElement) {
     return { content: fullContent, usage: { inputTokens: inputTokens, outputTokens: outputTokens } };
 }
 
+// Wrap streamed reasoning into the <think> markup that renderContent already
+// understands: an unclosed tag while only reasoning has arrived (renders as an
+// open "Thinking..." block), closed once the answer starts.
+function buildDisplayMarkdown(reasoning, content) {
+    if (!reasoning) return content;
+    if (!content) return `<think>${reasoning}`;
+    return `<think>${reasoning}</think>\n\n${content}`;
+}
+
 async function handleOpenAIStreamingResponse(response, displayElement) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
 
     let buffer = '';
     let fullContent = '';
+    let fullReasoning = '';
     let inputTokens = 0;
     let outputTokens = 0;
 
@@ -995,10 +1019,18 @@ async function handleOpenAIStreamingResponse(response, displayElement) {
                     outputTokens = data.usage.completion_tokens || outputTokens;
                 }
                 const delta = data.choices?.[0]?.delta;
+                if (!delta) continue;
 
-                if (delta?.content) {
-                    fullContent += delta.content;
-                    renderContent(fullContent, displayElement);
+                // GLM/Z.AI and DeepSeek stream thinking via `reasoning_content`,
+                // OpenRouter normalizes it to `reasoning`.
+                const reasoningChunk =
+                    (typeof delta.reasoning_content === 'string' && delta.reasoning_content) ||
+                    (typeof delta.reasoning === 'string' && delta.reasoning) || '';
+                if (reasoningChunk) fullReasoning += reasoningChunk;
+                if (delta.content) fullContent += delta.content;
+
+                if (reasoningChunk || delta.content) {
+                    renderContent(buildDisplayMarkdown(fullReasoning, fullContent), displayElement);
                 }
 
             } catch (error) {
@@ -1073,7 +1105,9 @@ function renderContent(content, element) {
 
 // Rich error display: title (always shown), optional detail, optional hint.
 // Backwards-compatible: showError('msg') still works as before.
-function showError(title, detail, hint) {
+// opts.retry: callback — renders a Retry button under the error. Attached via
+// addEventListener because the extension-page CSP forbids inline handlers.
+function showError(title, detail, hint, opts) {
     const html = `
         <div class="error-message">
             <strong>⚠️ ${escapeHtml(title || 'Error')}</strong>
@@ -1083,6 +1117,17 @@ function showError(title, detail, hint) {
     `;
     setResponseContentHtml(html);
     showCopyButton(false);
+
+    if (opts && typeof opts.retry === 'function') {
+        const errorBox = getResponseContent()?.querySelector('.error-message');
+        if (errorBox) {
+            const btn = document.createElement('button');
+            btn.className = 'retry-button';
+            btn.textContent = '🔄 Повторить';
+            btn.addEventListener('click', opts.retry);
+            errorBox.appendChild(btn);
+        }
+    }
 }
 
 function showApiError(error) {
@@ -1113,7 +1158,7 @@ function showApiError(error) {
         hint = '';
     }
 
-    showError(title, bodyDetail, hint);
+    showError(title, bodyDetail, hint, { retry: retryLastRequest });
 }
 
 chrome.storage.onChanged.addListener(async (changes, area) => {
