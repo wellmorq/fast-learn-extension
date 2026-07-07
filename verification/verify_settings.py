@@ -9,15 +9,8 @@ def verify_settings_ui(page: Page):
                 local: {
                     get: async (keys) => {
                         console.log('Mock storage.get called with', keys);
-                        // Return default settings
+                        // Let options.js apply shared product defaults.
                         return {
-                            apiProvider: 'google',
-                            apiKey: 'test-key',
-                            openaiBaseUrl: 'https://openrouter.ai/api/v1',
-                            openaiApiKey: '',
-                            fontSize: '16px',
-                            fontFamily: 'Roboto',
-                            colorTheme: 'soft-gray',
                             contextPresets: [],
                             followupPresets: []
                         };
@@ -45,29 +38,29 @@ def verify_settings_ui(page: Page):
     # Wait for initialization
     page.wait_for_timeout(500)
 
-    # Take screenshot of default state (Google selected)
-    page.screenshot(path="verification/1_google_settings.png")
+    # Take screenshot of default state (OpenAI-compatible selected)
+    page.screenshot(path="verification/1_openai_settings.png")
 
-    # Verify Google settings are visible and OpenAI settings are hidden
-    expect(page.locator("#google-settings-section")).to_be_visible()
-    expect(page.locator("#openai-settings-section")).to_be_hidden()
+    # Verify OpenAI-compatible settings are visible and Google settings are hidden
+    expect(page.locator("#google-settings-section")).to_be_hidden()
+    expect(page.locator("#openai-settings-section")).to_be_visible()
 
-    # Change provider to OpenAI
-    provider_select.select_option("openai")
+    # Verify default GLM/Z.AI Base URL
+    base_url_input = page.locator("#openai-base-url")
+    expect(base_url_input).to_have_value("https://api.z.ai/api/paas/v4")
+
+    # Change provider to Google
+    provider_select.select_option("google")
 
     # Trigger change event just in case (select_option usually does, but to be safe)
     provider_select.dispatch_event('change')
 
-    # Verify Google settings are hidden and OpenAI settings are visible
-    expect(page.locator("#google-settings-section")).to_be_hidden()
-    expect(page.locator("#openai-settings-section")).to_be_visible()
+    # Verify Google settings are visible and OpenAI-compatible settings are hidden
+    expect(page.locator("#google-settings-section")).to_be_visible()
+    expect(page.locator("#openai-settings-section")).to_be_hidden()
 
-    # Verify Default OpenAI Base URL
-    base_url_input = page.locator("#openai-base-url")
-    expect(base_url_input).to_have_value("https://openrouter.ai/api/v1")
-
-    # Take screenshot of OpenAI state
-    page.screenshot(path="verification/2_openai_settings.png")
+    # Take screenshot of Google state
+    page.screenshot(path="verification/2_google_settings.png")
 
 if __name__ == "__main__":
     with sync_playwright() as p:

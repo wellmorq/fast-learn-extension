@@ -45,7 +45,10 @@ async function initializePopup() {
     await loadSettings();
     applyFontSettings();
 
-    const stored = await chrome.storage.local.get(['selectedText', 'isPageContent', 'selectedPresetId', 'sourceUrl', 'sourceTitle']);
+    let stored = await chrome.storage.session.get(TRANSIENT_CONTEXT_KEYS);
+    if (!stored.selectedText) {
+        stored = await chrome.storage.local.get(TRANSIENT_CONTEXT_KEYS);
+    }
     const { selectedText, isPageContent, selectedPresetId, sourceUrl, sourceTitle } = stored;
 
     if (!selectedText) {
@@ -63,6 +66,8 @@ async function initializePopup() {
     if (selectedPresetId) {
         currentSettings.selectedPresetId = selectedPresetId;
     }
+
+    await chrome.storage.local.remove(TRANSIENT_CONTEXT_KEYS);
 
     await loadModels();
     await loadPresets();
@@ -87,16 +92,10 @@ async function loadSettings() {
         'followupPresets'
     ]);
 
+    const loadedSettings = withDefaultSettings(settings);
     currentSettings = {
-        apiProvider: settings.apiProvider || 'google',
-        apiKey: settings.apiKey || '',
-        openaiBaseUrl: settings.openaiBaseUrl || 'https://openrouter.ai/api/v1',
-        openaiApiKey: settings.openaiApiKey || '',
-        defaultModel: settings.defaultModel || 'glm-5.2',
-        model: settings.defaultModel || 'glm-5.2',
-        fontSize: settings.fontSize || '16px',
-        fontFamily: settings.fontFamily || 'Roboto',
-        colorTheme: settings.colorTheme || 'soft-gray',
+        ...loadedSettings,
+        model: loadedSettings.defaultModel,
         defaultContextPresetId: settings.defaultContextPresetId || null,
         defaultFollowupPresetId: settings.defaultFollowupPresetId || null,
         contextPresets: settings.contextPresets || [],
@@ -116,7 +115,8 @@ async function loadPresets() {
 }
 
 async function loadContextPreset() {
-    const { selectedPresetId } = await chrome.storage.local.get('selectedPresetId');
+    const { selectedPresetId: storedPresetId } = await chrome.storage.session.get('selectedPresetId');
+    const selectedPresetId = storedPresetId || currentSettings.selectedPresetId || null;
     const contextSelect = document.getElementById('context-preset-select');
     contextSelect.innerHTML = '';
 
@@ -150,6 +150,7 @@ async function loadContextPreset() {
     }
 
     if (selectedPresetId) {
+        await chrome.storage.session.remove('selectedPresetId');
         await chrome.storage.local.remove('selectedPresetId');
     }
 }
@@ -551,6 +552,72 @@ function checkTokenBudgetOrError(allMessages, systemPrompt, useModel) {
     return true;
 }
 
+function removeDanglingUserMessage() {
+    if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+        messages.pop();
+    }
+}
+
+function getRequestConfig(isFollowUp) {
+    if (!isFollowUp) {
+        const preset = contextPreset;
+        if (!preset) {
+            showError('No context preset loaded');
+            return null;
+        }
+
+        return {
+            preset: preset,
+            model: preset.model || currentSettings.defaultModel,
+            temperature: validateTemperature(preset.temperature),
+            thinkingBudget: validateThinkingBudget(preset.thinkingBudget)
+        };
+    }
+
+    const preset = currentFollowupPreset;
+    if (!preset) {
+        showError('No follow-up preset selected');
+        return null;
+    }
+
+    const tempSlider = document.getElementById('temp-slider');
+    const budgetInput = document.getElementById('budget-input');
+    return {
+        preset: preset,
+        model: currentSettings.model,
+        temperature: validateTemperature(tempSlider.value),
+        thinkingBudget: validateThinkingBudget(budgetInput.value)
+    };
+}
+
+function prepareRequest(message, isFollowUp) {
+    const config = getRequestConfig(isFollowUp);
+    if (!config) return null;
+
+    if (!isFollowUp) {
+        messages = [{ role: 'user', parts: [{ text: message }] }];
+    } else {
+        messages.push({ role: 'user', parts: [{ text: message }] });
+    }
+
+    const systemPrompt = config.preset.systemPrompt
+        ? applyPromptVariables(config.preset.systemPrompt, getPromptContext())
+        : '';
+
+    if (!checkTokenBudgetOrError(messages, systemPrompt, config.model)) {
+        removeDanglingUserMessage();
+        return null;
+    }
+
+    return {
+        model: config.model,
+        temperature: config.temperature,
+        thinkingBudget: config.thinkingBudget,
+        systemPrompt: systemPrompt,
+        messages: messages
+    };
+}
+
 async function sendFollowUpQuestion() {
     const input = document.getElementById('follow-up-input');
     const question = input.value.trim();
@@ -632,76 +699,19 @@ async function sendToGemini(message, isFollowUp) {
     const mySeq = ++requestSeq;
 
     try {
-        let preset;
-        let useModel, useTemp, useBudget;
+        const prepared = prepareRequest(message, isFollowUp);
+        if (!prepared) return;
 
-        if (!isFollowUp) {
-            preset = contextPreset;
-            if (!preset) {
-                showError('No context preset loaded');
-                return;
-            }
-            useModel = preset.model || currentSettings.defaultModel;
-            useTemp = validateTemperature(preset.temperature);
-            useBudget = validateThinkingBudget(preset.thinkingBudget);
-        } else {
-            preset = currentFollowupPreset;
-            if (!preset) {
-                showError('No follow-up preset selected');
-                return;
-            }
-            useModel = currentSettings.model;
-            const tempSlider = document.getElementById('temp-slider');
-            const budgetInput = document.getElementById('budget-input');
-            useTemp = validateTemperature(tempSlider.value);
-            useBudget = validateThinkingBudget(budgetInput.value);
-        }
-
-        if (!isFollowUp) {
-            messages = [{ role: 'user', parts: [{ text: message }] }];
-        } else {
-            messages.push({ role: 'user', parts: [{ text: message }] });
-        }
-
-        const resolvedSystemPrompt = preset.systemPrompt
-            ? applyPromptVariables(preset.systemPrompt, getPromptContext())
-            : '';
-
-        // Pre-flight token budget check
-        if (!checkTokenBudgetOrError(messages, resolvedSystemPrompt, useModel)) {
-            if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
-                messages.pop();
-            }
-            return;
-        }
-
-        const requestBody = {
-            contents: messages,
-            generationConfig: { temperature: useTemp }
-        };
-
-        if (resolvedSystemPrompt) {
-            requestBody.systemInstruction = {
-                role: 'user',
-                parts: [{ text: resolvedSystemPrompt }]
-            };
-        }
-
-        if (useBudget !== 0 && geminiSupportsThinking(useModel)) {
-            requestBody.generationConfig.thinkingConfig = { thinking_budget: useBudget };
-        }
-
-        const model = addModelPrefix(useModel);
-        const url = `https://generativelanguage.googleapis.com/v1beta/${model}:streamGenerateContent?alt=sse&key=${currentSettings.apiKey}`;
+        const request = buildGeminiRequest(prepared, currentSettings.apiKey);
 
         currentAbortController = new AbortController();
         lastRequestStartedAt = performance.now();
         currentStreamingMarkdown = '';
 
-        const response = await fetch(url, {
+        const response = await fetch(request.url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody),
+            body: JSON.stringify(request.body),
             signal: currentAbortController.signal
         });
 
@@ -713,7 +723,8 @@ async function sendToGemini(message, isFollowUp) {
             throw err;
         }
 
-        const result = await handleStreamingResponse(response, displayElement);
+        displayElement.innerHTML = '';
+        const result = await readGeminiStream(response, content => renderContent(content, displayElement));
         const fullResponse = result.content;
         const usage = result.usage;
         const duration = performance.now() - lastRequestStartedAt;
@@ -732,9 +743,7 @@ async function sendToGemini(message, isFollowUp) {
             handleAbortedResponse(displayElement);
         } else {
             console.error('Gemini API error:', error);
-            if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
-                messages.pop();
-            }
+            removeDanglingUserMessage();
             showApiError(error);
         }
     } finally {
@@ -765,89 +774,22 @@ async function sendToOpenAI(message, isFollowUp) {
     const mySeq = ++requestSeq;
 
     try {
-        let preset;
-        let useModel, useTemp, useBudget;
+        const prepared = prepareRequest(message, isFollowUp);
+        if (!prepared) return;
 
-        if (!isFollowUp) {
-            preset = contextPreset;
-            if (!preset) {
-                showError('No context preset loaded');
-                return;
-            }
-            useModel = preset.model || currentSettings.defaultModel;
-            useTemp = validateTemperature(preset.temperature);
-            useBudget = validateThinkingBudget(preset.thinkingBudget);
-        } else {
-            preset = currentFollowupPreset;
-            if (!preset) {
-                showError('No follow-up preset selected');
-                return;
-            }
-            useModel = currentSettings.model;
-            const tempSlider = document.getElementById('temp-slider');
-            const budgetInput = document.getElementById('budget-input');
-            useTemp = validateTemperature(tempSlider.value);
-            useBudget = validateThinkingBudget(budgetInput.value);
-        }
-
-        if (!isFollowUp) {
-            messages = [{ role: 'user', parts: [{ text: message }] }];
-        } else {
-            messages.push({ role: 'user', parts: [{ text: message }] });
-        }
-
-        const resolvedSystemPrompt = preset.systemPrompt
-            ? applyPromptVariables(preset.systemPrompt, getPromptContext())
-            : '';
-
-        // Pre-flight token budget check
-        if (!checkTokenBudgetOrError(messages, resolvedSystemPrompt, useModel)) {
-            if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
-                messages.pop();
-            }
-            return;
-        }
-
-        const openAIMessages = [];
-
-        if (resolvedSystemPrompt) {
-            openAIMessages.push({ role: 'system', content: resolvedSystemPrompt });
-        }
-
-        messages.forEach(msg => {
-            let role = msg.role;
-            if (role === 'model') role = 'assistant';
-            const content = msg.parts.map(p => p.text).join('');
-            openAIMessages.push({ role: role, content: content });
-        });
-
-        const requestBody = {
-            model: useModel,
-            messages: openAIMessages,
-            temperature: useTemp,
-            stream: true,
-            stream_options: { include_usage: true }
-        };
-
-        // GLM (Z.AI / Zhipu) supports a top-level `thinking` toggle.
-        if (isGlmModel(useModel)) {
-            requestBody.thinking = { type: useBudget === 0 ? 'disabled' : 'enabled' };
-        }
-
-        const baseUrl = currentSettings.openaiBaseUrl.replace(/\/$/, '');
-        const url = `${baseUrl}/chat/completions`;
+        const request = buildOpenAICompatibleRequest(prepared, currentSettings.openaiBaseUrl);
 
         currentAbortController = new AbortController();
         lastRequestStartedAt = performance.now();
         currentStreamingMarkdown = '';
 
-        const response = await fetch(url, {
+        const response = await fetch(request.url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${currentSettings.openaiApiKey}`
             },
-            body: JSON.stringify(requestBody),
+            body: JSON.stringify(request.body),
             signal: currentAbortController.signal
         });
 
@@ -859,7 +801,8 @@ async function sendToOpenAI(message, isFollowUp) {
             throw err;
         }
 
-        const result = await handleOpenAIStreamingResponse(response, displayElement);
+        displayElement.innerHTML = '';
+        const result = await readOpenAICompatibleStream(response, content => renderContent(content, displayElement));
         const fullResponse = result.content;
         const usage = result.usage;
         const duration = performance.now() - lastRequestStartedAt;
@@ -878,9 +821,7 @@ async function sendToOpenAI(message, isFollowUp) {
             handleAbortedResponse(displayElement);
         } else {
             console.error('OpenAI API error:', error);
-            if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
-                messages.pop();
-            }
+            removeDanglingUserMessage();
             showApiError(error);
         }
     } finally {
@@ -893,9 +834,7 @@ async function sendToOpenAI(message, isFollowUp) {
 
 function handleAbortedResponse(displayElement) {
     // Pop the dangling user message — same as for any other failure.
-    if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
-        messages.pop();
-    }
+    removeDanglingUserMessage();
     if (!displayElement) return;
     const hasContent = currentStreamingMarkdown && currentStreamingMarkdown.length > 0;
     if (hasContent) {
@@ -911,196 +850,9 @@ function handleAbortedResponse(displayElement) {
     }
 }
 
-async function handleStreamingResponse(response, displayElement) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-
-    let buffer = '';
-    let fullContent = '';
-    let inputTokens = 0;
-    let outputTokens = 0;
-
-    displayElement.innerHTML = '';
-
-    while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-            if (line.startsWith('data: ')) {
-                const jsonStr = line.substring(6).trim();
-                if (!jsonStr || jsonStr === '[DONE]') continue;
-
-                try {
-                    const data = JSON.parse(jsonStr);
-                    if (data && data.usageMetadata) {
-                        inputTokens = data.usageMetadata.promptTokenCount || inputTokens;
-                        outputTokens = data.usageMetadata.candidatesTokenCount || outputTokens;
-                    }
-                    const candidate = data?.candidates?.[0];
-
-                    if (!candidate) continue;
-
-                    if (candidate.finishReason && candidate.finishReason !== 'STOP') {
-                        console.warn('Gemini finish reason:', candidate.finishReason);
-                        if (candidate.finishReason === 'SAFETY') {
-                            fullContent += '\n\n⚠️ _Response was stopped for safety reasons._';
-                        }
-                    }
-
-                    // A chunk may carry several parts (and thought parts when
-                    // thinking is on) — concatenate all text, skip thoughts.
-                    let chunkText = '';
-                    for (const part of candidate.content?.parts || []) {
-                        if (part.thought) continue;
-                        if (part.text) chunkText += part.text;
-                    }
-                    if (chunkText) {
-                        fullContent += chunkText;
-                        renderContent(fullContent, displayElement);
-                    }
-
-                } catch (error) {
-                    console.warn('Chunk parsing error:', error);
-                }
-            }
-        }
-    }
-
-    return { content: fullContent, usage: { inputTokens: inputTokens, outputTokens: outputTokens } };
-}
-
-// Wrap streamed reasoning into the <think> markup that renderContent already
-// understands: an unclosed tag while only reasoning has arrived (renders as an
-// open "Thinking..." block), closed once the answer starts.
-function buildDisplayMarkdown(reasoning, content) {
-    if (!reasoning) return content;
-    if (!content) return `<think>${reasoning}`;
-    return `<think>${reasoning}</think>\n\n${content}`;
-}
-
-async function handleOpenAIStreamingResponse(response, displayElement) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-
-    let buffer = '';
-    let fullContent = '';
-    let fullReasoning = '';
-    let inputTokens = 0;
-    let outputTokens = 0;
-
-    displayElement.innerHTML = '';
-
-    while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-            const trimmedLine = line.trim();
-            if (!trimmedLine || !trimmedLine.startsWith('data: ')) continue;
-
-            const jsonStr = trimmedLine.substring(6).trim();
-            if (jsonStr === '[DONE]') continue;
-
-            try {
-                const data = JSON.parse(jsonStr);
-                if (data && data.usage) {
-                    inputTokens = data.usage.prompt_tokens || inputTokens;
-                    outputTokens = data.usage.completion_tokens || outputTokens;
-                }
-                const delta = data.choices?.[0]?.delta;
-                if (!delta) continue;
-
-                // GLM/Z.AI and DeepSeek stream thinking via `reasoning_content`,
-                // OpenRouter normalizes it to `reasoning`.
-                const reasoningChunk =
-                    (typeof delta.reasoning_content === 'string' && delta.reasoning_content) ||
-                    (typeof delta.reasoning === 'string' && delta.reasoning) || '';
-                if (reasoningChunk) fullReasoning += reasoningChunk;
-                if (delta.content) fullContent += delta.content;
-
-                if (reasoningChunk || delta.content) {
-                    renderContent(buildDisplayMarkdown(fullReasoning, fullContent), displayElement);
-                }
-
-            } catch (error) {
-                console.warn('Chunk parsing error:', error);
-            }
-        }
-    }
-
-    return { content: fullContent, usage: { inputTokens: inputTokens, outputTokens: outputTokens } };
-}
-
 function renderContent(content, element) {
     currentStreamingMarkdown = content;
-
-    const thinkingBlocks = [];
-    let processedContent = content;
-
-    // 1. Handle closed blocks <think>...</think>
-    const closedThinkingRegex = /<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi;
-    processedContent = processedContent.replace(closedThinkingRegex, (match, thinkingContent) => {
-        const id = `THINKING_BLOCK_${thinkingBlocks.length}_PLACEHOLDER`;
-        thinkingBlocks.push({
-            id: id,
-            content: thinkingContent.trim(),
-            isOpen: false
-        });
-        return `\n\n${id}\n\n`;
-    });
-
-    // 2. Handle open block at the end (for streaming)
-    const openThinkingRegex = /<think(?:ing)?>([\s\S]*?)$/i;
-    const openMatch = openThinkingRegex.exec(processedContent);
-
-    if (openMatch) {
-        const thinkingContent = openMatch[1];
-        const id = `THINKING_BLOCK_${thinkingBlocks.length}_PLACEHOLDER`;
-
-        processedContent = processedContent.substring(0, openMatch.index) + `\n\n${id}\n\n`;
-
-        thinkingBlocks.push({
-            id: id,
-            content: thinkingContent.trim(),
-            isOpen: true
-        });
-    }
-
-    let html = marked.parse(processedContent);
-
-    thinkingBlocks.forEach(block => {
-        const escapedBlock = block.content
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
-
-        const summaryText = block.isOpen ? '💭 Thinking...' : '💭 Thought Process';
-        const detailsAttribute = block.isOpen ? ' open' : '';
-
-        const thinkingHtml = `
-      <details class="thinking-block"${detailsAttribute}>
-        <summary>${summaryText}</summary>
-        <div class="thinking-content">${escapedBlock}</div>
-      </details>
-    `;
-
-        html = html.replace(block.id, () => thinkingHtml);
-    });
-
-    element.innerHTML = html;
+    renderResponseContent(content, element);
 }
 
 // Rich error display: title (always shown), optional detail, optional hint.

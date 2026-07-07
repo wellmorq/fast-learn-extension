@@ -33,6 +33,7 @@ global.chrome = {
 };
 
 const root = path.join(__dirname, '..');
+eval(fs.readFileSync(path.join(root, 'scripts', 'settings.js'), 'utf8'));
 eval(fs.readFileSync(path.join(root, 'scripts', 'utils.js'), 'utf8'));
 eval(fs.readFileSync(path.join(root, 'scripts', 'background.js'), 'utf8'));
 
@@ -76,6 +77,28 @@ function assert(cond, msg) {
     const local2 = await chrome.storage.local.get(['contextPresets', 'apiProvider']);
     assert(local2.contextPresets[0].id === 'local-1', 'restore does not clobber existing local presets');
     assert(local2.apiProvider === 'google', 'restore does not clobber existing local settings');
+
+    // 5. factory defaults stay aligned with the GLM/Z.AI-first product state
+    await chrome.storage.local.clear();
+    await initializeDefaultSettings('all');
+    const defaults = await chrome.storage.local.get(['apiProvider', 'openaiBaseUrl', 'defaultModel', 'fontSize', 'fontFamily', 'colorTheme']);
+    assert(defaults.apiProvider === DEFAULT_SETTINGS.apiProvider, 'factory apiProvider uses shared default');
+    assert(defaults.openaiBaseUrl === DEFAULT_SETTINGS.openaiBaseUrl, 'factory Base URL uses shared default');
+    assert(defaults.defaultModel === DEFAULT_SETTINGS.defaultModel, 'factory model uses shared default');
+    assert(defaults.fontSize === DEFAULT_SETTINGS.fontSize, 'factory font size uses shared default');
+    assert(defaults.fontFamily === DEFAULT_SETTINGS.fontFamily, 'factory font family uses shared default');
+    assert(defaults.colorTheme === DEFAULT_SETTINGS.colorTheme, 'factory theme uses shared default');
+
+    // 6. selected/page text is transient and should not persist in local storage
+    await chrome.storage.local.clear();
+    await chrome.storage.session.clear();
+    chrome.scripting.executeScript = async () => [{ result: 'selected text' }];
+    await runLookupOnTab({ id: 123, url: 'https://example.com/page', title: 'Example' });
+    const transientLocal = await chrome.storage.local.get(TRANSIENT_CONTEXT_KEYS);
+    const transientSession = await chrome.storage.session.get(TRANSIENT_CONTEXT_KEYS);
+    assert(!('selectedText' in transientLocal), 'lookup text is not written to local storage');
+    assert(transientSession.selectedText === 'selected text', 'lookup text is written to session storage');
+    assert(transientSession.sourceUrl === 'https://example.com/page', 'lookup source URL is transient');
 
     console.log(process.exitCode ? 'TESTS FAILED' : 'ALL TESTS PASSED');
 })();

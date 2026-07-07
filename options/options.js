@@ -33,20 +33,20 @@ async function loadSettings() {
         'followupPresets'
     ]);
 
-    currentSettings = settings;
+    currentSettings = withDefaultSettings(settings);
 
-    const apiProvider = settings.apiProvider || 'google';
+    const apiProvider = currentSettings.apiProvider;
     document.getElementById('api-provider').value = apiProvider;
     toggleProviderSettings(apiProvider);
 
-    document.getElementById('api-key').value = settings.apiKey || '';
+    document.getElementById('api-key').value = currentSettings.apiKey;
 
-    document.getElementById('openai-base-url').value = settings.openaiBaseUrl || 'https://openrouter.ai/api/v1';
-    document.getElementById('openai-api-key').value = settings.openaiApiKey || '';
+    document.getElementById('openai-base-url').value = currentSettings.openaiBaseUrl;
+    document.getElementById('openai-api-key').value = currentSettings.openaiApiKey;
 
-    document.getElementById('font-size').value = settings.fontSize || '16px';
-    document.getElementById('font-family').value = settings.fontFamily || 'Roboto';
-    document.getElementById('color-theme').value = settings.colorTheme || 'soft-gray';
+    document.getElementById('font-size').value = currentSettings.fontSize;
+    document.getElementById('font-family').value = currentSettings.fontFamily;
+    document.getElementById('color-theme').value = currentSettings.colorTheme;
 
     applyTheme();
 }
@@ -65,9 +65,9 @@ function toggleProviderSettings(provider) {
 }
 
 function applyTheme() {
-    const fontSize = currentSettings.fontSize || '16px';
-    const fontFamily = currentSettings.fontFamily || 'Roboto';
-    const colorTheme = currentSettings.colorTheme || 'soft-gray';
+    const fontSize = currentSettings.fontSize || DEFAULT_SETTINGS.fontSize;
+    const fontFamily = currentSettings.fontFamily || DEFAULT_SETTINGS.fontFamily;
+    const colorTheme = currentSettings.colorTheme || DEFAULT_SETTINGS.colorTheme;
 
     document.documentElement.style.setProperty('--base-font-size', fontSize);
     document.documentElement.style.setProperty('--font-family', buildFontStack(fontFamily));
@@ -247,12 +247,18 @@ function setupPresetEventListeners(element, preset, index, type) {
         presets.splice(index, 1);
         unsavedPresetIds.delete(preset.id);
 
-        if (preset.isDefault && presets.length > 0) {
+        const storageKey = type === 'context' ? 'contextPresets' : 'followupPresets';
+        const defaultKey = type === 'context' ? 'defaultContextPresetId' : 'defaultFollowupPresetId';
+        let defaultPreset = presets.find(p => p.isDefault);
+        if (!defaultPreset && presets.length > 0) {
             presets[0].isDefault = true;
+            defaultPreset = presets[0];
         }
 
-        const storageKey = type === 'context' ? 'contextPresets' : 'followupPresets';
-        await chrome.storage.local.set({ [storageKey]: presets });
+        await chrome.storage.local.set({
+            [storageKey]: presets,
+            [defaultKey]: defaultPreset ? defaultPreset.id : null
+        });
         renderPresets(type);
         showStatus('Preset deleted', 'success');
     });
@@ -373,7 +379,7 @@ async function fetchModelsFromGoogle() {
 }
 
 async function fetchModelsFromOpenAI() {
-    const baseUrl = document.getElementById('openai-base-url').value.replace(/\/$/, '');
+    const baseUrl = document.getElementById('openai-base-url').value.replace(/\/+$/, '');
     const apiKey = document.getElementById('openai-api-key').value;
 
     if (!baseUrl || !apiKey) {
@@ -544,13 +550,21 @@ function setupEventListeners() {
             return;
         }
 
-        await chrome.storage.local.clear();
-        chrome.runtime.sendMessage({ action: 'reinitialize' });
-        showStatus('Settings reset. Reload the page.', 'info');
+        try {
+            await chrome.storage.local.clear();
+            const response = await chrome.runtime.sendMessage({ action: 'reinitialize' });
+            if (response && response.success === false) {
+                throw new Error(response.error || 'reinitialize failed');
+            }
+            showStatus('Settings reset. Reload the page.', 'info');
 
-        setTimeout(() => {
-            location.reload();
-        }, 1500);
+            setTimeout(() => {
+                location.reload();
+            }, 1500);
+        } catch (error) {
+            console.error('Reset error:', error);
+            showStatus(`Reset error: ${error.message}`, 'error');
+        }
     });
 }
 

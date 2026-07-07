@@ -1,23 +1,7 @@
-importScripts('utils.js');
+importScripts('settings.js', 'utils.js');
 
 let lastWindowLeft, lastWindowTop, popupWidth, popupHeight;
 let popupWindowId = null;
-
-// Settings replicated to chrome.storage.sync (cross-device). API keys stay
-// local-only by design; transient state (selection, window bounds, model
-// cache) is machine-specific and isn't synced either.
-const SYNCED_SETTINGS_KEYS = [
-    'apiProvider',
-    'openaiBaseUrl',
-    'defaultModel',
-    'defaultContextPresetId',
-    'defaultFollowupPresetId',
-    'fontSize',
-    'fontFamily',
-    'colorTheme',
-    'contextPresets',
-    'followupPresets'
-];
 
 chrome.runtime.onInstalled.addListener(async (details) => {
     try {
@@ -253,12 +237,12 @@ async function initializeDefaultSettings(scope = 'all') {
     }
     if (scope === 'all') {
         update.initialized = true;
-        update.apiProvider = 'openai';
-        update.openaiBaseUrl = 'https://api.z.ai/api/paas/v4';
-        update.defaultModel = 'glm-5.2';
-        update.fontSize = '16px';
-        update.fontFamily = 'Roboto';
-        update.colorTheme = 'soft-gray';
+        update.apiProvider = DEFAULT_SETTINGS.apiProvider;
+        update.openaiBaseUrl = DEFAULT_SETTINGS.openaiBaseUrl;
+        update.defaultModel = DEFAULT_SETTINGS.defaultModel;
+        update.fontSize = DEFAULT_SETTINGS.fontSize;
+        update.fontFamily = DEFAULT_SETTINGS.fontFamily;
+        update.colorTheme = DEFAULT_SETTINGS.colorTheme;
     }
 
     await chrome.storage.local.set(update);
@@ -335,7 +319,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             }
         }
 
-        await chrome.storage.local.set({
+        await chrome.storage.session.set({
             selectedText: textToProcess,
             isPageContent: isPageContent,
             selectedPresetId: presetId,
@@ -379,7 +363,7 @@ async function runLookupOnTab(tab) {
         }
 
         if (textToProcess) {
-            await chrome.storage.local.set({
+            await chrome.storage.session.set({
                 selectedText: textToProcess,
                 isPageContent: isPageContent,
                 // Clear any preset id left over from a context-menu invocation
