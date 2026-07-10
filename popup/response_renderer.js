@@ -1,5 +1,71 @@
+function renderStreamingResponse(reasoning, content, element) {
+    if (!element) return;
+
+    let shell = element.querySelector('.streaming-response');
+    if (!shell) {
+        element.innerHTML = '';
+        shell = createStreamingResponseShell();
+        element.appendChild(shell);
+    }
+
+    const details = shell.querySelector('.thinking-block');
+    const summary = details.querySelector('summary');
+    const thinkingContent = details.querySelector('.thinking-content');
+    const answer = shell.querySelector('.streaming-answer');
+    const thinkingText = String(reasoning || '').trim();
+
+    if (thinkingContent.textContent !== thinkingText) {
+        const shouldStickToBottom = isNearScrollBottom(thinkingContent);
+        const previousTop = thinkingContent.scrollTop;
+        thinkingContent.textContent = thinkingText;
+
+        if (shouldStickToBottom) {
+            scrollToBottom(thinkingContent);
+        } else {
+            thinkingContent.scrollTop = previousTop;
+        }
+    }
+
+    const hasAnswer = !!content;
+    summary.textContent = hasAnswer ? '💭 Thought Process' : '💭 Thinking...';
+    answer.hidden = !hasAnswer;
+
+    if (hasAnswer) {
+        answer.innerHTML = sanitizeRenderedHtml(marked.parse(content));
+    }
+}
+
+function createStreamingResponseShell() {
+    const shell = document.createElement('div');
+    shell.className = 'streaming-response';
+
+    const details = document.createElement('details');
+    details.className = 'thinking-block';
+    details.open = true;
+
+    const summary = document.createElement('summary');
+    summary.textContent = '💭 Thinking...';
+
+    const thinkingContent = document.createElement('div');
+    thinkingContent.className = 'thinking-content';
+
+    const answer = document.createElement('div');
+    answer.className = 'streaming-answer';
+    answer.hidden = true;
+
+    details.appendChild(summary);
+    details.appendChild(thinkingContent);
+    shell.appendChild(details);
+    shell.appendChild(answer);
+    return shell;
+}
+
+function finalizeStreamingResponse(element) {
+    const summary = element?.querySelector('.streaming-response .thinking-block summary');
+    if (summary) summary.textContent = '💭 Thought Process';
+}
+
 function renderResponseContent(content, element) {
-    if (renderStreamingThinkingOnly(content, element)) return;
 
     const thinkingBlocks = [];
     let processedContent = content;
@@ -58,47 +124,6 @@ function renderResponseContent(content, element) {
     html = sanitizeRenderedHtml(html);
     element.innerHTML = html;
     restoreThinkingScrollState(element, thinkingScroll);
-}
-
-function renderStreamingThinkingOnly(content, element) {
-    const match = /^<think(?:ing)?>([\s\S]*)$/i.exec(content || '');
-    if (!match || !element) return false;
-
-    // Keep the scroll container alive while reasoning streams; replacing it on
-    // every chunk resets scroll and breaks browser autoscroll.
-    const thinkingText = match[1].trim();
-    let contentEl = element.querySelector('.thinking-block[data-streaming-thinking="true"] .thinking-content');
-
-    if (!contentEl) {
-        element.innerHTML = '';
-
-        const details = document.createElement('details');
-        details.className = 'thinking-block';
-        details.open = true;
-        details.dataset.streamingThinking = 'true';
-
-        const summary = document.createElement('summary');
-        summary.textContent = '💭 Thinking...';
-
-        contentEl = document.createElement('div');
-        contentEl.className = 'thinking-content';
-
-        details.appendChild(summary);
-        details.appendChild(contentEl);
-        element.appendChild(details);
-    }
-
-    const shouldStickToBottom = isNearScrollBottom(contentEl);
-    const previousTop = contentEl.scrollTop;
-    contentEl.textContent = thinkingText;
-
-    if (shouldStickToBottom) {
-        scrollToBottom(contentEl);
-    } else {
-        contentEl.scrollTop = previousTop;
-    }
-
-    return true;
 }
 
 function collectThinkingScrollState(element) {

@@ -159,12 +159,12 @@ function createPresetElement(preset, index, type) {
 
 function populateModelSelect(select, selectedModel) {
     select.innerHTML = '<option value="">Use default</option>';
-    cachedModels.forEach(model => {
+    includeSelectedModel(cachedModels, selectedModel).forEach(model => {
         const option = document.createElement('option');
         const displayName = stripModelPrefix(model);
         option.value = model;
         option.textContent = displayName;
-        if (model === selectedModel) {
+        if (modelNamesEqual(model, selectedModel)) {
             option.selected = true;
         }
         select.appendChild(option);
@@ -286,8 +286,7 @@ async function loadModels() {
     const { cachedModels: cached, cachedModelsProvider, defaultModel } =
         await chrome.storage.local.get(['cachedModels', 'cachedModelsProvider', 'defaultModel']);
 
-    // Ignore a cache that belongs to a different provider (older caches without
-    // a provider tag are still trusted to avoid a forced refresh).
+    // Older caches have no provider tag and remain compatible.
     const cacheUsable = cached && cached.length > 0 &&
         (!cachedModelsProvider || cachedModelsProvider === provider);
 
@@ -304,12 +303,12 @@ function populateDefaultModelSelect(models, selectedModel) {
     const modelSelect = document.getElementById('default-model');
     modelSelect.innerHTML = '';
 
-    models.forEach(model => {
+    includeSelectedModel(models, selectedModel).forEach(model => {
         const option = document.createElement('option');
         const displayName = stripModelPrefix(model);
         option.value = model;
         option.textContent = displayName;
-        if (model === selectedModel || displayName === selectedModel) {
+        if (modelNamesEqual(model, selectedModel)) {
             option.selected = true;
         }
         modelSelect.appendChild(option);
@@ -490,10 +489,6 @@ function setupEventListeners() {
         const provider = e.target.value;
         toggleProviderSettings(provider);
 
-        // Show provider-appropriate fallback models right away so the page stays
-        // usable (and savable) before the user refreshes the live list. Keep the
-        // saved default model only when it belongs to this provider — otherwise
-        // a Gemini model would land at the top of the GLM list (and vice versa).
         const savedProvider = currentSettings.apiProvider || 'google';
         const keepDefault = provider === savedProvider ? currentSettings.defaultModel : undefined;
         cachedModels = getFallbackModels(provider, keepDefault);
@@ -705,8 +700,7 @@ function showStatus(message, type = 'info') {
     }, 5000);
 }
 
-// Escapes quotes too (the innerHTML trick doesn't) — the result is inserted
-// into attribute contexts like value="...", not just text nodes.
+// Output is safe for quoted HTML attributes.
 function escapeHtml(text) {
     return String(text ?? '')
         .replace(/&/g, '&amp;')

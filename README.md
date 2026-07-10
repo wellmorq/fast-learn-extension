@@ -26,6 +26,9 @@ A Chrome extension for analyzing and explaining web content using Google Gemini 
 
 5. Configure your provider and API key in the extension options
 
+There is no build step. Edit the source files and reload the unpacked extension
+from `chrome://extensions/`.
+
 ## Getting API Key
 
 For Google Gemini, get your API key at [Google AI Studio](https://aistudio.google.com/app/apikey).
@@ -40,6 +43,36 @@ For OpenAI-compatible providers, use the provider's Base URL and API key. The ex
 4. Ask follow-up questions to continue the conversation
 
 Alternative: Use keyboard shortcut `Ctrl+Shift+Q` (Windows/Linux) or `Cmd+Shift+Q` (Mac)
+
+## Development
+
+The extension uses plain JavaScript, HTML, and CSS. Runtime dependencies are
+vendored in `libs/`; `package.json` is intentionally not required.
+
+Script load order is part of the runtime contract:
+
+- Popup: `settings.js`, `utils.js`, `lookup_context.js`,
+  `provider_requests.js`, `streaming.js`, `response_renderer.js`, `popup.js`
+- Options: `settings.js`, `utils.js`, `options.js`
+- Background worker: `settings.js`, `utils.js`, `lookup_context.js`,
+  `background.js`
+
+Run the static and Node smoke checks with Node.js 18 or newer:
+
+```powershell
+.\verification\verify.ps1
+```
+
+The optional browser UI smoke test also requires Python and Playwright:
+
+```powershell
+python -m pip install playwright
+python -m playwright install chromium
+.\verification\verify.ps1 -Ui
+```
+
+See [HANDOFF.md](HANDOFF.md) for architecture, storage ownership, manual test
+cases, and transfer notes.
 
 ## License
 

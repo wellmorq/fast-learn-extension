@@ -19,6 +19,8 @@ Thumbs.db
 # Temporary files
 *~
 .tmp/
+verification/__pycache__/
+verification/artifacts/
 
 # Gemini AI context file
 GEMINI.md

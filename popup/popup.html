@@ -10,7 +10,6 @@
 </head>
 
 <body>
-    <!-- Controls panel -->
     <div class="controls">
         <div class="control-group">
             <label class="control-label">Context:</label>
@@ -34,7 +33,6 @@
         </div>
     </div>
 
-    <!-- Text preview header -->
     <div class="header">
         <div class="text-preview-container" id="preview-container">
             <div class="text-preview" id="text-preview"></div>
@@ -42,12 +40,9 @@
         </div>
     </div>
 
-    <!-- Content area -->
     <div class="content">
-        <!-- Message history -->
         <div class="message-history" id="message-history"></div>
 
-        <!-- Response area -->
         <div class="response-area" id="response-area">
             <button class="copy-action" id="copy-current-response" title="Copy as Markdown" style="display:none">📋</button>
             <div class="response-content" id="response-content">
@@ -56,9 +51,7 @@
         </div>
     </div>
 
-    <!-- Follow-up input area -->
     <div class="input-area">
-        <!-- Parameter controls -->
         <div class="param-controls">
             <div class="param-item">
                 <label class="param-label">🌡️</label>
@@ -73,7 +66,6 @@
             </div>
         </div>
 
-        <!-- Follow-up input -->
         <div class="follow-up-container">
             <textarea class="follow-up-input" id="follow-up-input" placeholder="Ask a follow-up question..."
                 autocomplete="off" rows="1"></textarea>
@@ -81,10 +73,10 @@
         </div>
     </div>
 
-    <!-- Scripts -->
     <script src="../libs/marked.min.js"></script>
     <script src="../scripts/settings.js"></script>
     <script src="../scripts/utils.js"></script>
+    <script src="../scripts/lookup_context.js"></script>
     <script src="../scripts/provider_requests.js"></script>
     <script src="../scripts/streaming.js"></script>
     <script src="response_renderer.js"></script>

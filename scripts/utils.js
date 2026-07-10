@@ -18,9 +18,6 @@ function validateTemperature(value) {
     return num;
 }
 
-// Settings store a bare family name; wrap it with system fallbacks so the UI
-// degrades gracefully when the font isn't installed (Google Fonts is not
-// loaded from the network anymore).
 function buildFontStack(fontFamily) {
     const primary = (fontFamily || 'Roboto').replace(/['"]/g, '');
     return `'${primary}', -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif`;
@@ -37,12 +34,14 @@ function addModelPrefix(modelName) {
     return `models/${modelName}`;
 }
 
+function modelNamesEqual(left, right) {
+    if (!left || !right) return false;
+    return left === right || stripModelPrefix(left) === stripModelPrefix(right);
+}
+
 function estimateTokenCount(text) {
     if (!text) return 0;
-    // Heuristic: ASCII tokenizes at ~4 chars/token; non-ASCII (Cyrillic, CJK,
-    // accented Latin, emoji) at ~3 chars/token because BPE splits them into
-    // multiple subtokens more often. This adapts naturally to mixed content
-    // without needing a language switch.
+    // Approximate ASCII at 4 chars/token and non-ASCII at 3 chars/token.
     let wide = 0;
     for (let i = 0; i < text.length; i++) {
         if (text.charCodeAt(i) > 127) wide++;
@@ -56,16 +55,12 @@ function isGlmModel(modelName) {
     return /^glm[-_]/i.test(modelName);
 }
 
-// thinkingConfig is only accepted by Gemini 2.5+ models; sending it to older
-// ones (1.5/2.0) makes the API reject the whole request with HTTP 400.
+// Older Gemini models reject thinkingConfig.
 function geminiSupportsThinking(modelName) {
     const name = stripModelPrefix(modelName || '').toLowerCase();
     return /gemini-(2\.5|[3-9])/.test(name) || name.includes('thinking');
 }
 
-// Provider-appropriate model list to show before a live model list is fetched.
-// GLM/Z.AI is the primary provider, so the OpenAI-compatible branch lists GLM
-// models (configured default first) rather than Gemini ones.
 function getFallbackModels(provider, defaultModel) {
     if (provider === 'google') {
         return [
@@ -80,6 +75,15 @@ function getFallbackModels(provider, defaultModel) {
     const base = ['glm-5.2', 'glm-5.1', 'glm-5-turbo'];
     if (defaultModel && !base.includes(defaultModel)) base.unshift(defaultModel);
     return base;
+}
+
+function includeSelectedModel(models, selectedModel) {
+    const list = Array.isArray(models) ? models.slice() : [];
+    if (!selectedModel) return list;
+
+    const isPresent = list.some(model => modelNamesEqual(model, selectedModel));
+    if (!isPresent) list.unshift(selectedModel);
+    return list;
 }
 
 const PROMPT_VARIABLES_HELP = '{{selectedText}}, {{pageUrl}}, {{pageTitle}}, {{date}}, {{datetime}}, {{lang}}';
@@ -100,8 +104,6 @@ function applyPromptVariables(prompt, ctx) {
         .replace(/\{\{\s*lang\s*\}\}/g, lang);
 }
 
-// Approximate context windows by model family (used for pre-flight token warnings).
-// Keys are matched as substrings against lowercased model name; longest match wins.
 const MODEL_CONTEXT_LIMITS = {
     'glm-5.2': 200000,
     'glm-5.1': 200000,

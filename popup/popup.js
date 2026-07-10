@@ -5,26 +5,15 @@ let contextPreset = null;
 let currentFollowupPreset = null;
 let followupPresetOriginalValues = {};
 
-// === New state ===
-// Snapshot of what was sent to the popup at open time. Used to (a) re-fire
-// the initial query when the user switches the context preset, and (b)
-// resolve {{selectedText}} / {{pageUrl}} / {{pageTitle}} in system prompts.
 let initialContext = { text: '', isPageContent: false, sourceUrl: '', sourceTitle: '' };
-// AbortController of the in-flight fetch — populated before each request.
 let currentAbortController = null;
-// Monotonic request counter. Each request captures its value; stale callbacks
-// (e.g. the aborted request when the user switches preset mid-stream) compare
-// against the global and bail out so they can't clobber the newer request.
+// Prevent stale streams from mutating a newer request.
 let requestSeq = 0;
-// Markdown source of the last completed response (for the Copy button).
 let lastResponseMarkdown = '';
-// Markdown of the currently-streaming response (so Copy works mid-stream too,
-// and so partial text is preserved on Stop).
 let currentStreamingMarkdown = '';
-// performance.now() timestamp of last fetch start, used for usage footer duration.
 let lastRequestStartedAt = 0;
-// Last sendToAI invocation, so the Retry button on error/abort can re-fire it.
 let lastRequest = null;
+const POPUP_CONTEXT_CACHE_KEY = 'fastLearn.lookupContext';
 
 function escapeHtml(text) {
     const div = document.createElement('div');
@@ -45,10 +34,7 @@ async function initializePopup() {
     await loadSettings();
     applyFontSettings();
 
-    let stored = await chrome.storage.session.get(TRANSIENT_CONTEXT_KEYS);
-    if (!stored.selectedText) {
-        stored = await chrome.storage.local.get(TRANSIENT_CONTEXT_KEYS);
-    }
+    const stored = await loadPopupLookupContext();
     const { selectedText, isPageContent, selectedPresetId, sourceUrl, sourceTitle } = stored;
 
     if (!selectedText) {
@@ -67,13 +53,39 @@ async function initializePopup() {
         currentSettings.selectedPresetId = selectedPresetId;
     }
 
-    await chrome.storage.local.remove(TRANSIENT_CONTEXT_KEYS);
-
     await loadModels();
     await loadPresets();
     displayTextPreview(selectedText, isPageContent);
     setupEventListeners();
     await sendToAI(selectedText, false);
+}
+
+async function loadPopupLookupContext() {
+    let cached = null;
+    try {
+        cached = sessionStorage.getItem(POPUP_CONTEXT_CACHE_KEY);
+    } catch (error) {
+        console.warn('Popup context cache is unavailable:', error.message);
+    }
+
+    if (cached) {
+        try {
+            return JSON.parse(cached);
+        } catch (_) {
+            try { sessionStorage.removeItem(POPUP_CONTEXT_CACHE_KEY); } catch (_) {}
+        }
+    }
+
+    const contextId = new URLSearchParams(window.location.search).get('context');
+    const context = await takeLookupContext(contextId);
+    if (context.selectedText) {
+        try {
+            sessionStorage.setItem(POPUP_CONTEXT_CACHE_KEY, JSON.stringify(context));
+        } catch (error) {
+            console.warn('Popup context could not be cached for reload:', error.message);
+        }
+    }
+    return context;
 }
 
 async function loadSettings() {
@@ -115,8 +127,7 @@ async function loadPresets() {
 }
 
 async function loadContextPreset() {
-    const { selectedPresetId: storedPresetId } = await chrome.storage.session.get('selectedPresetId');
-    const selectedPresetId = storedPresetId || currentSettings.selectedPresetId || null;
+    const selectedPresetId = currentSettings.selectedPresetId || null;
     const contextSelect = document.getElementById('context-preset-select');
     contextSelect.innerHTML = '';
 
@@ -149,10 +160,6 @@ async function loadContextPreset() {
         contextPreset = preset;
     }
 
-    if (selectedPresetId) {
-        await chrome.storage.session.remove('selectedPresetId');
-        await chrome.storage.local.remove('selectedPresetId');
-    }
 }
 
 async function loadFollowupPresets() {
@@ -200,8 +207,6 @@ function applyFollowupPreset(preset) {
     currentSettings.model = preset.model || currentSettings.defaultModel;
     const modelSelect = document.getElementById('model-select');
     if (modelSelect) {
-        // If the preset references a model not in the current list, add it so it
-        // can actually be selected rather than falling back to the first entry.
         if (currentSettings.model &&
             ![...modelSelect.options].some(o => o.value === currentSettings.model)) {
             const opt = document.createElement('option');
@@ -237,8 +242,7 @@ async function loadModels() {
     const provider = currentSettings.apiProvider;
     const { cachedModels, cachedModelsProvider } = await chrome.storage.local.get(['cachedModels', 'cachedModelsProvider']);
 
-    // Only trust the cache if it belongs to the active provider (older caches
-    // had no provider tag — treat those as usable to avoid a forced refresh).
+    // Older caches have no provider tag and remain compatible.
     const cacheUsable = cachedModels && cachedModels.length > 0 &&
         (!cachedModelsProvider || cachedModelsProvider === provider);
 
@@ -253,14 +257,8 @@ function populateModelSelect(models) {
     const modelSelect = document.getElementById('model-select');
     modelSelect.innerHTML = '';
 
-    // Make sure the currently desired model is always present as an option, so
-    // a configured GLM model is never silently swapped for the first Gemini
-    // entry (and vice-versa).
-    const list = models.slice();
     const desired = currentSettings.model;
-    if (desired && !list.some(m => m === desired || stripModelPrefix(m) === stripModelPrefix(desired))) {
-        list.unshift(desired);
-    }
+    const list = includeSelectedModel(models, desired);
 
     let isSelected = false;
 
@@ -269,7 +267,7 @@ function populateModelSelect(models) {
         const displayName = stripModelPrefix(model);
         option.value = model;
         option.textContent = displayName;
-        if (model === currentSettings.model || displayName === currentSettings.model) {
+        if (modelNamesEqual(model, currentSettings.model)) {
             option.selected = true;
             isSelected = true;
         }
@@ -282,10 +280,6 @@ function populateModelSelect(models) {
     }
 }
 
-// Estimate of what will actually be sent on the FIRST request (text + the
-// resolved context preset's system prompt). Updated whenever the user
-// switches context preset. Closer to the real `↑ N` reported by the API
-// than counting the raw selection alone.
 function estimatePreviewTokens(text) {
     let combined = text || '';
     if (contextPreset && contextPreset.systemPrompt) {
@@ -383,7 +377,6 @@ function setupEventListeners() {
         this.style.height = Math.min(this.scrollHeight, 150) + 'px';
     });
 
-    // Escape: stop an in-flight generation, or close the popup window when idle.
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
         if (isProcessing) {
@@ -393,11 +386,8 @@ function setupEventListeners() {
         }
     });
 
-    // Focus the input so the user can immediately type a follow-up / press Enter.
     followUpInput.focus();
 }
-
-// === New helpers ===
 
 function getResponseContent() {
     return document.getElementById('response-content');
@@ -435,7 +425,7 @@ function setProcessing(state) {
 
 function stopGeneration() {
     if (currentAbortController) {
-        try { currentAbortController.abort(); } catch (_) { /* ignore */ }
+        try { currentAbortController.abort(); } catch (_) {}
     }
 }
 
@@ -464,7 +454,6 @@ async function handleContextPresetChange(e) {
     if (messages.length > 0) {
         const ok = confirm(`Switch context preset to "${newPreset.name}"?\n\nThis restarts the conversation from the original text.`);
         if (!ok) {
-            // revert UI selection
             e.target.value = contextPreset ? contextPreset.id : '';
             return;
         }
@@ -529,11 +518,7 @@ function appendUsageFooter(displayElement, usage, durationMs) {
     displayElement.appendChild(div);
 }
 
-// Pre-flight token budget check; returns true if OK, otherwise renders the
-// error in the response area and returns false.
 function checkTokenBudgetOrError(allMessages, systemPrompt, useModel) {
-    // Sum the weighted estimate over each real text fragment so Cyrillic/CJK is
-    // counted the same way as the preview (chars/3) rather than as ASCII.
     let tokens = estimateTokenCount(systemPrompt || '');
     for (const m of allMessages) {
         if (m && m.parts) {
@@ -630,7 +615,6 @@ async function sendFollowUpQuestion() {
     const hasError = !!(responseContent && responseContent.querySelector('.error-message'));
 
     if (hasContent && !hasLoading && !hasError) {
-        // Move current response into history with its own copy button
         const historyDiv = document.getElementById('message-history');
         const modelMessageDiv = document.createElement('div');
         modelMessageDiv.className = 'model-message';
@@ -645,7 +629,6 @@ async function sendFollowUpQuestion() {
         lastResponseMarkdown = '';
         currentStreamingMarkdown = '';
     } else if (hasError) {
-        // Don't carry the error into history; just clear it.
         responseContent.innerHTML = '';
     }
 
@@ -693,9 +676,6 @@ async function sendToGemini(message, isFollowUp) {
     showLoading('Processing...');
 
     const displayElement = getResponseContent();
-    // Claim a sequence number for the whole invocation (including the early
-    // validation returns below) so the finally block always resets state for
-    // the latest request, and stale/superseded callbacks bail out.
     const mySeq = ++requestSeq;
 
     try {
@@ -724,7 +704,10 @@ async function sendToGemini(message, isFollowUp) {
         }
 
         displayElement.innerHTML = '';
-        const result = await readGeminiStream(response, content => renderContent(content, displayElement));
+        const result = await readGeminiStream(response, content => {
+            if (mySeq === requestSeq) renderContent(content, displayElement);
+        });
+        if (mySeq !== requestSeq) return;
         const fullResponse = result.content;
         const usage = result.usage;
         const duration = performance.now() - lastRequestStartedAt;
@@ -736,8 +719,6 @@ async function sendToGemini(message, isFollowUp) {
         messages.push({ role: 'model', parts: [{ text: fullResponse }] });
 
     } catch (error) {
-        // A newer request has superseded this one (e.g. preset switch); don't
-        // let this stale callback touch shared state.
         if (mySeq !== requestSeq) return;
         if (error.name === 'AbortError' || (error.message && /aborted/i.test(error.message))) {
             handleAbortedResponse(displayElement);
@@ -768,9 +749,6 @@ async function sendToOpenAI(message, isFollowUp) {
     showLoading('Processing...');
 
     const displayElement = getResponseContent();
-    // Claim a sequence number for the whole invocation (including the early
-    // validation returns below) so the finally block always resets state for
-    // the latest request, and stale/superseded callbacks bail out.
     const mySeq = ++requestSeq;
 
     try {
@@ -802,11 +780,18 @@ async function sendToOpenAI(message, isFollowUp) {
         }
 
         displayElement.innerHTML = '';
-        const result = await readOpenAICompatibleStream(response, content => renderContent(content, displayElement));
+        const result = await readOpenAICompatibleStream(
+            response,
+            (content, streamState) => {
+                if (mySeq === requestSeq) renderContent(content, displayElement, streamState);
+            }
+        );
+        if (mySeq !== requestSeq) return;
         const fullResponse = result.content;
         const usage = result.usage;
         const duration = performance.now() - lastRequestStartedAt;
 
+        if (result.hasReasoning) finalizeStreamingResponse(displayElement);
         appendUsageFooter(displayElement, usage, duration);
         lastResponseMarkdown = fullResponse;
         showCopyButton(!!fullResponse);
@@ -814,8 +799,6 @@ async function sendToOpenAI(message, isFollowUp) {
         messages.push({ role: 'model', parts: [{ text: fullResponse }] });
 
     } catch (error) {
-        // A newer request has superseded this one (e.g. preset switch); don't
-        // let this stale callback touch shared state.
         if (mySeq !== requestSeq) return;
         if (error.name === 'AbortError' || (error.message && /aborted/i.test(error.message))) {
             handleAbortedResponse(displayElement);
@@ -833,12 +816,11 @@ async function sendToOpenAI(message, isFollowUp) {
 }
 
 function handleAbortedResponse(displayElement) {
-    // Pop the dangling user message — same as for any other failure.
     removeDanglingUserMessage();
     if (!displayElement) return;
     const hasContent = currentStreamingMarkdown && currentStreamingMarkdown.length > 0;
     if (hasContent) {
-        // Keep partial content + a stopped marker; allow copy of partial.
+        finalizeStreamingResponse(displayElement);
         const marker = document.createElement('div');
         marker.className = 'stopped-marker';
         marker.textContent = '⏹ Остановлено пользователем';
@@ -850,15 +832,15 @@ function handleAbortedResponse(displayElement) {
     }
 }
 
-function renderContent(content, element) {
+function renderContent(content, element, streamState) {
     currentStreamingMarkdown = content;
-    renderResponseContent(content, element);
+    if (streamState && streamState.hasReasoning) {
+        renderStreamingResponse(streamState.reasoning, streamState.content, element);
+    } else {
+        renderResponseContent(content, element);
+    }
 }
 
-// Rich error display: title (always shown), optional detail, optional hint.
-// Backwards-compatible: showError('msg') still works as before.
-// opts.retry: callback — renders a Retry button under the error. Attached via
-// addEventListener because the extension-page CSP forbids inline handlers.
 function showError(title, detail, hint, opts) {
     const html = `
         <div class="error-message">

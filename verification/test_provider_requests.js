@@ -1,4 +1,3 @@
-// Node smoke test for provider request builders (run: node verification/test_provider_requests.js)
 const fs = require('fs');
 const path = require('path');
 
