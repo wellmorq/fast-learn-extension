@@ -26,6 +26,17 @@ def verify_settings_ui(page: Page):
             },
             runtime: {
                 sendMessage: async () => {}
+            },
+            commands: {
+                getAll: async () => [{
+                    name: 'fast-learn-lookup',
+                    shortcut: 'Ctrl+Shift+Q'
+                }]
+            },
+            tabs: {
+                create: async (options) => {
+                    window.openedTabUrl = options.url;
+                }
             }
         };
     """)
@@ -43,7 +54,21 @@ def verify_settings_ui(page: Page):
     expect(page.locator("#openai-settings-section")).to_be_visible()
 
     base_url_input = page.locator("#openai-base-url")
-    expect(base_url_input).to_have_value("https://api.z.ai/api/paas/v4")
+    expect(base_url_input).to_have_value("https://api.z.ai/api/coding/paas/v4")
+    expect(page.locator("#shortcut-value")).to_have_text("Ctrl+Shift+Q")
+
+    page.evaluate("""async () => {
+        chrome.commands.getAll = async () => [{
+            name: 'fast-learn-lookup',
+            shortcut: ''
+        }];
+        await loadShortcut();
+    }""")
+    expect(page.locator("#shortcut-value")).to_have_text("Not assigned")
+    expect(page.locator("#shortcut-value")).to_have_class("unassigned")
+
+    page.locator("#configure-shortcut-button").click()
+    page.wait_for_function("window.openedTabUrl === 'chrome://extensions/shortcuts'")
 
     provider_select.select_option("google")
 

@@ -8,6 +8,7 @@ let unsavedPresetIds = new Set();
 document.addEventListener('DOMContentLoaded', async () => {
     try {
         await loadSettings();
+        await loadShortcut();
         await loadModels();
         await loadPresets();
         setupEventListeners();
@@ -49,6 +50,27 @@ async function loadSettings() {
     document.getElementById('color-theme').value = currentSettings.colorTheme;
 
     applyTheme();
+}
+
+async function loadShortcut() {
+    const shortcutValue = document.getElementById('shortcut-value');
+    const shortcutHint = document.getElementById('shortcut-hint');
+
+    try {
+        const commands = await chrome.commands.getAll();
+        const command = commands.find(item => item.name === 'fast-learn-lookup');
+        const shortcut = command?.shortcut || '';
+
+        shortcutValue.textContent = shortcut || 'Not assigned';
+        shortcutValue.classList.toggle('unassigned', !shortcut);
+        shortcutHint.textContent = shortcut
+            ? 'Shortcut assignments are stored by Chrome on this computer.'
+            : 'Chrome did not assign the suggested shortcut, usually because of a conflict.';
+    } catch (error) {
+        shortcutValue.textContent = 'Unavailable';
+        shortcutValue.classList.add('unassigned');
+        shortcutHint.textContent = 'Open chrome://extensions/shortcuts to check the assignment.';
+    }
 }
 
 function toggleProviderSettings(provider) {
@@ -485,6 +507,8 @@ async function testAPIKey() {
 }
 
 function setupEventListeners() {
+    window.addEventListener('focus', loadShortcut);
+
     document.getElementById('api-provider').addEventListener('change', (e) => {
         const provider = e.target.value;
         toggleProviderSettings(provider);
@@ -538,6 +562,13 @@ function setupEventListeners() {
     document.getElementById('refresh-models-button').addEventListener('click', fetchModelsFromAPI);
     document.getElementById('test-api-button').addEventListener('click', testAPIKey);
     document.getElementById('test-openai-api-button').addEventListener('click', testAPIKey);
+    document.getElementById('configure-shortcut-button').addEventListener('click', async () => {
+        try {
+            await chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+        } catch (error) {
+            showStatus('Open chrome://extensions/shortcuts to configure the shortcut.', 'info');
+        }
+    });
     document.getElementById('save-button').addEventListener('click', saveSettings);
 
     document.getElementById('reset-button').addEventListener('click', async () => {

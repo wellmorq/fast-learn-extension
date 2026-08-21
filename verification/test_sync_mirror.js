@@ -99,6 +99,34 @@ function assert(cond, msg) {
     assert(defaults.fontFamily === DEFAULT_SETTINGS.fontFamily, 'factory font family uses shared default');
     assert(defaults.colorTheme === DEFAULT_SETTINGS.colorTheme, 'factory theme uses shared default');
 
+    await chrome.storage.local.remove('settingsMigrationVersion');
+    await chrome.storage.local.set({ openaiBaseUrl: ZAI_GENERAL_BASE_URL });
+    await migrateLegacyZaiEndpoint();
+    const migratedEndpoint = await chrome.storage.local.get(['settingsMigrationVersion', 'openaiBaseUrl']);
+    assert(migratedEndpoint.openaiBaseUrl === ZAI_CODING_PLAN_BASE_URL, 'legacy Z.AI default migrates to Coding Plan');
+    assert(migratedEndpoint.settingsMigrationVersion === CURRENT_SETTINGS_MIGRATION_VERSION, 'endpoint migration runs once');
+
+    await chrome.storage.local.set({ openaiBaseUrl: ZAI_GENERAL_BASE_URL });
+    await migrateLegacyZaiEndpoint();
+    const preservedEndpoint = await chrome.storage.local.get('openaiBaseUrl');
+    assert(preservedEndpoint.openaiBaseUrl === ZAI_GENERAL_BASE_URL, 'later explicit general endpoint choice is preserved');
+
+    await mirrorLocalToSync();
+    await chrome.storage.local.clear();
+    await restoreFromSyncIfAvailable();
+    await migrateLegacyZaiEndpoint();
+    const restoredEndpoint = await chrome.storage.local.get(['settingsMigrationVersion', 'openaiBaseUrl']);
+    assert(restoredEndpoint.openaiBaseUrl === ZAI_GENERAL_BASE_URL, 'synced explicit endpoint choice survives a fresh installation');
+    assert(restoredEndpoint.settingsMigrationVersion === CURRENT_SETTINGS_MIGRATION_VERSION, 'migration state is restored from sync');
+
+    const customEndpoint = 'https://openrouter.ai/api/v1';
+    await chrome.storage.local.clear();
+    await chrome.storage.sync.clear();
+    await chrome.storage.local.set({ openaiBaseUrl: customEndpoint });
+    await migrateLegacyZaiEndpoint();
+    const customEndpointAfterMigration = await chrome.storage.local.get('openaiBaseUrl');
+    assert(customEndpointAfterMigration.openaiBaseUrl === customEndpoint, 'custom Base URL is preserved during migration');
+
     await chrome.storage.local.clear();
     await chrome.storage.session.clear();
     chrome.scripting.executeScript = async () => [{ result: 'selected text' }];

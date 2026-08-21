@@ -5,6 +5,7 @@ let lastWindowLeft, lastWindowTop, popupWidth, popupHeight;
 chrome.runtime.onInstalled.addListener(async (details) => {
     try {
         await restoreFromSyncIfAvailable();
+        await migrateLegacyZaiEndpoint();
         await ensureDefaultSettingsExist();
         await createContextMenu();
         scheduleMirrorToSync();
@@ -13,6 +14,17 @@ chrome.runtime.onInstalled.addListener(async (details) => {
         console.error('onInstalled failed:', error);
     }
 });
+
+async function migrateLegacyZaiEndpoint() {
+    const storage = await chrome.storage.local.get(['settingsMigrationVersion', 'openaiBaseUrl']);
+    if ((storage.settingsMigrationVersion || 0) >= CURRENT_SETTINGS_MIGRATION_VERSION) return;
+
+    const update = { settingsMigrationVersion: CURRENT_SETTINGS_MIGRATION_VERSION };
+    if (storage.openaiBaseUrl === ZAI_GENERAL_BASE_URL) {
+        update.openaiBaseUrl = ZAI_CODING_PLAN_BASE_URL;
+    }
+    await chrome.storage.local.set(update);
+}
 
 async function restoreFromSyncIfAvailable() {
     try {
@@ -275,6 +287,7 @@ async function initializeDefaultSettings(scope = 'all') {
     }
     if (scope === 'all') {
         update.initialized = true;
+        update.settingsMigrationVersion = CURRENT_SETTINGS_MIGRATION_VERSION;
         update.apiProvider = DEFAULT_SETTINGS.apiProvider;
         update.openaiBaseUrl = DEFAULT_SETTINGS.openaiBaseUrl;
         update.defaultModel = DEFAULT_SETTINGS.defaultModel;

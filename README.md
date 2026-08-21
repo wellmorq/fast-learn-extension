@@ -33,7 +33,11 @@ from `chrome://extensions/`.
 
 For Google Gemini, get your API key at [Google AI Studio](https://aistudio.google.com/app/apikey).
 
-For OpenAI-compatible providers, use the provider's Base URL and API key. The extension defaults are tuned for GLM/Z.AI.
+For OpenAI-compatible providers, use the provider's Base URL and API key. The
+extension defaults to the Z.AI Coding Plan endpoint:
+`https://api.z.ai/api/coding/paas/v4`. Use the general
+`https://api.z.ai/api/paas/v4` endpoint only for resource packages or prepaid
+balance.
 
 ## Usage
 
@@ -42,7 +46,11 @@ For OpenAI-compatible providers, use the provider's Base URL and API key. The ex
 3. View AI-generated analysis in popup window
 4. Ask follow-up questions to continue the conversation
 
-Alternative: Use keyboard shortcut `Ctrl+Shift+Q` (Windows/Linux) or `Cmd+Shift+Q` (Mac)
+Alternative: Use keyboard shortcut `Ctrl+Shift+Q` (Windows/Linux) or
+`Cmd+Shift+Q` (Mac). Chrome stores shortcut assignments per installation and
+may leave a suggested shortcut unassigned when it conflicts with another
+command. Check its actual state in the extension settings or at
+`chrome://extensions/shortcuts`.
 
 ## Development
 

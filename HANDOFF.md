@@ -28,6 +28,9 @@ Because there is no bundler, preserve the script order documented in
   keys stay local and are never mirrored to sync storage.
 - `chrome.storage.sync` is a best-effort mirror of safe settings and presets.
   Missing values may be restored from it, but existing local values win.
+- The default OpenAI-compatible Base URL is the Z.AI Coding Plan endpoint.
+  Version `2.4.1` performs a one-time migration only for the previous exact
+  Z.AI general endpoint; later explicit choices and custom URLs are preserved.
 - `chrome.storage.session` holds a separately keyed lookup context and ownership
   entry for each popup. The popup consumes the context on first load; closing
   the window removes any context that was never consumed.
@@ -37,6 +40,8 @@ Because there is no bundler, preserve the script order documented in
 An archive or Git checkout does not include Chrome storage. A new developer
 must configure their own provider and API key. Custom presets also need a
 separate sanitized export if exact user configuration must be reproduced.
+Keyboard shortcut assignments are also local Chrome state; verify them in the
+options page after installing the unpacked extension on another computer.
 
 ## Verification
 

@@ -118,6 +118,23 @@ body {
     margin-top: 4px;
 }
 
+.shortcut-control {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+#shortcut-value {
+    font-family: Consolas, monospace;
+    font-weight: 600;
+}
+
+#shortcut-value.unassigned {
+    color: #c5221f;
+}
+
 input[type="text"],
 input[type="password"],
 input[type="number"],
